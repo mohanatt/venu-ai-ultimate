@@ -1,187 +1,326 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import streamlit as st
-from groq import Groq
-from tavily import TavilyClient
+
+from agents import DEFAULT_GROQ_MODEL_ID, MasterAgent
 
 
-SUPPORTED_GROQ_MODELS = {
-    "openai/gpt-oss-20b",
-    "openai/gpt-oss-120b",
-    "qwen/qwen3.8-27b",
-}
+# --------------------------------------------------
+# CONFIGURATION
+# --------------------------------------------------
 
-DEFAULT_GROQ_MODEL_ID = "openai/gpt-oss-20b"
+st.set_page_config(
+    page_title="VENU AI ULTIMATE",
+    page_icon="🤖",
+    layout="wide",
+)
 
 
-def get_secret(name: str) -> str:
-    """Read a secret from Streamlit or environment variables."""
+# --------------------------------------------------
+# SECRETS
+# --------------------------------------------------
+
+def get_secret(name: str, default: str = "") -> str:
+    """Read a value from Streamlit Secrets or environment variables."""
     try:
         value = st.secrets.get(name)
+
         if value:
             return str(value).strip()
+
     except Exception:
         pass
 
-    return os.getenv(name, "").strip()
+    return os.getenv(name, default).strip()
 
 
-def resolve_model_id(model: Optional[str] = None) -> str:
-    candidate = (
-        model or get_secret("GROQ_MODEL_ID") or DEFAULT_GROQ_MODEL_ID
-    ).strip()
-
-    if candidate in SUPPORTED_GROQ_MODELS:
-        return candidate
-
-    return DEFAULT_GROQ_MODEL_ID
+def get_groq_api_key() -> str:
+    return get_secret("GROQ_API_KEY")
 
 
-class GroqAgent:
-    """Groq-powered AI assistant."""
-
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-    ):
-        self.api_key = api_key or get_secret("GROQ_API_KEY")
-        self.model = resolve_model_id(model)
-        self.client = Groq(api_key=self.api_key) if self.api_key else None
-
-    def generate(
-        self,
-        user_prompt: str,
-        system_prompt: str,
-        history: Optional[List[Dict[str, str]]] = None,
-    ) -> str:
-        if not self.client:
-            raise ValueError(
-                "GROQ_API_KEY missing. Add it in Streamlit Secrets."
-            )
-
-        messages = [{"role": "system", "content": system_prompt}]
-
-        if history:
-            for item in history[-10:]:
-                role = item.get("role")
-                content = item.get("content")
-
-                if role in {"user", "assistant"} and content:
-                    messages.append({
-                        "role": role,
-                        "content": content,
-                    })
-
-        messages.append({"role": "user", "content": user_prompt})
-
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=0.5,
-            max_tokens=1200,
-        )
-
-        return (response.choices[0].message.content or "").strip()
+def get_groq_model_id() -> str:
+    return get_secret(
+        "GROQ_MODEL_ID",
+        DEFAULT_GROQ_MODEL_ID,
+    )
 
 
-class InternetSearchAgent:
-    """Search the web using Tavily."""
+# --------------------------------------------------
+# SIDEBAR
+# --------------------------------------------------
 
-    def __init__(self, max_results: int = 5):
-        self.max_results = max_results
-        self.api_key = get_secret("TAVILY_API_KEY")
+def build_sidebar() -> str:
+    st.sidebar.title("🤖 VENU AI ULTIMATE")
+    st.sidebar.caption("Your Personal Multi-Agent AI Assistant")
 
-    def search(
-        self,
-        query: str,
-        max_results: Optional[int] = None,
-    ) -> List[Dict[str, str]]:
-        if not self.api_key:
-            raise RuntimeError(
-                "TAVILY_API_KEY missing. Add it in Streamlit Secrets."
-            )
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### ✨ Features")
 
-        client = TavilyClient(api_key=self.api_key)
+    st.sidebar.markdown(
+        """
+        - 🌐 Internet Search
+        - 📰 Current information
+        - 💻 Coding assistance
+        - 📚 Study assistance
+        - 🇮🇳 Tamil + English
+        """
+    )
 
-        response = client.search(
-            query=query,
-            topic="general",
-            search_depth="basic",
-            max_results=max_results or self.max_results,
-        )
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Choose AI Agent")
 
-        results = []
+    selected_agent = st.sidebar.selectbox(
+        "Select an agent",
+        [
+            "Master Agent",
+            "Internet Search Agent",
+            "Coding Agent",
+            "Study Agent",
+        ],
+        key="selected_agent",
+    )
 
-        for item in response.get("results", []):
-            url = (item.get("url") or "").strip()
+    st.sidebar.markdown("---")
+    st.sidebar.caption(
+        f"Groq Model: {get_groq_model_id()}"
+    )
 
-            if not url:
-                continue
+    st.sidebar.info(
+        "API keys are stored in Streamlit Secrets. "
+        "Never share them publicly."
+    )
 
-            results.append({
-                "title": item.get("title") or "Untitled",
-                "url": url,
-                "snippet": item.get("content") or "",
-                "date": (
-                    item.get("published_date")
-                    or "Date not available"
+    if st.sidebar.button("🗑️ Clear Chat"):
+        st.session_state.messages = [
+            {
+                "role": "assistant",
+                "content": (
+                    "வணக்கம்! நான் VENU AI. "
+                    "என்ன உதவி வேண்டும்?"
                 ),
-            })
+            }
+        ]
 
-        return results
+        st.rerun()
 
-
-class CodingAgent(GroqAgent):
-    def answer(self, question, history=None):
-        return self.generate(
-            question,
-            "You are an expert coding assistant. Explain code clearly. "
-            "Use simple Tamil when appropriate.",
-            history,
-        )
+    return selected_agent
 
 
-class StudyAgent(GroqAgent):
-    def explain(self, topic, history=None):
-        return self.generate(
-            topic,
-            "You are a patient tutor. Explain subjects in simple Tamil "
-            "with examples and step-by-step instructions.",
-            history,
-        )
+# --------------------------------------------------
+# SEARCH RESULTS
+# --------------------------------------------------
 
+def render_search_results(
+    results: List[Dict[str, Any]],
+) -> None:
+    if not results:
+        return
 
-class MasterAgent:
-    """Coordinates AI responses and Internet Search."""
-
-    def __init__(self, api_key=None, model=None):
-        self.groq_agent = GroqAgent(api_key, model)
-        self.search_agent = InternetSearchAgent()
-        self.coding_agent = CodingAgent(api_key, model)
-        self.study_agent = StudyAgent(api_key, model)
-
-    def handle_internet_search(self, query):
-        try:
-            results = self.search_agent.search(query, max_results=5)
-
-            if not results:
-                return {
-                    "answer": "தேடலுக்கான முடிவுகள் கிடைக்கவில்லை.",
-                    "search_results": [],
-                    "used_internet_search": True,
-                }
-
-            context = "\n\n".join(
-                f"Title: {r['title']}\n"
-                f"URL: {r['url']}\n"
-                f"Information: {r['snippet']}"
-                for r in results
+    with st.expander(
+        "🌐 Internet Search Results",
+        expanded=True,
+    ):
+        for index, result in enumerate(
+            results,
+            start=1,
+        ):
+            title = result.get("title", "Untitled")
+            url = result.get("url", "")
+            snippet = result.get(
+                "snippet",
+                "No summary available.",
+            )
+            date_value = result.get(
+                "date",
+                "Date not available",
             )
 
-            answer = self.groq_agent.generate(
-                user_prompt
+            st.markdown(f"### {index}. {title}")
 
+            if url:
+                st.markdown(f"[🔗 Open Source]({url})")
+
+            if snippet:
+                st.write(snippet)
+
+            st.caption(f"Date: {date_value}")
+            st.markdown("---")
+
+
+# --------------------------------------------------
+# AGENT INITIALIZATION
+# --------------------------------------------------
+
+def initialize_agent() -> None:
+    if "master_agent" in st.session_state:
+        return
+
+    groq_key = get_groq_api_key()
+
+    if not groq_key:
+        st.error(
+            "GROQ_API_KEY கிடைக்கவில்லை. "
+            "Streamlit Secrets பகுதியில் API Key சேர்க்கவும்."
+        )
+
+        st.code(
+            'GROQ_API_KEY = "your_groq_api_key"\n'
+            'GROQ_MODEL_ID = "openai/gpt-oss-20b"\n'
+            'TAVILY_API_KEY = "your_tavily_api_key"',
+            language="toml",
+        )
+
+        st.stop()
+
+    model_id = get_groq_model_id()
+
+    try:
+        st.session_state.master_agent = MasterAgent(
+            api_key=groq_key,
+            model=model_id,
+        )
+
+    except Exception as exc:
+        st.error(
+            f"AI initialization failed: {exc}"
+        )
+        st.stop()
+
+
+# --------------------------------------------------
+# CHAT
+# --------------------------------------------------
+
+def render_chat_history() -> None:
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+
+def process_prompt(
+    prompt: str,
+    selected_agent: str,
+) -> None:
+    st.session_state.messages.append(
+        {
+            "role": "user",
+            "content": prompt,
+        }
+    )
+
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    history = st.session_state.messages[:-1]
+    agent = st.session_state.master_agent
+
+    with st.chat_message("assistant"):
+        with st.spinner("VENU AI பதில் உருவாக்குகிறது..."):
+            try:
+                if selected_agent == "Internet Search Agent":
+                    response = agent.handle_internet_search(
+                        prompt
+                    )
+
+                elif selected_agent == "Coding Agent":
+                    response = agent.handle_coding(
+                        prompt,
+                        history=history,
+                    )
+
+                elif selected_agent == "Study Agent":
+                    response = agent.handle_study(
+                        prompt,
+                        history=history,
+                    )
+
+                else:
+                    response = agent.handle(
+                        prompt,
+                        history=history,
+                    )
+
+                answer = response.get(
+                    "answer",
+                    "பதில் உருவாக்க முடியவில்லை.",
+                )
+
+                st.markdown(answer)
+
+                if response.get("used_internet_search"):
+                    render_search_results(
+                        response.get("search_results", [])
+                    )
+
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": answer,
+                    }
+                )
+
+            except Exception as exc:
+                error_message = (
+                    "பதில் உருவாக்கும்போது பிழை ஏற்பட்டது.\n\n"
+                    f"விவரம்: {exc}"
+                )
+
+                st.error(error_message)
+
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": error_message,
+                    }
+                )
+
+
+# --------------------------------------------------
+# MAIN APP
+# --------------------------------------------------
+
+def main() -> None:
+    selected_agent = build_sidebar()
+
+    st.title("🤖 VENU AI ULTIMATE")
+
+    st.caption(
+        "Your Personal Multi-Agent AI Assistant | "
+        "தமிழ் + English"
+    )
+
+    st.markdown("---")
+
+    if "messages" not in st.session_state:
+        st.session_state.messages = [
+            {
+                "role": "assistant",
+                "content": (
+                    "வணக்கம்! 👋 நான் VENU AI.\n\n"
+                    "உனக்கு படிப்பு, Coding, Internet Search "
+                    "போன்ற விஷயங்களில் உதவ முடியும்.\n\n"
+                    "என்ன கேட்க விரும்புகிறாய்?"
+                ),
+            }
+        ]
+
+    initialize_agent()
+
+    render_chat_history()
+
+    prompt = st.chat_input(
+        "உங்கள் கேள்வியை உள்ளிடவும்... / Ask your question..."
+    )
+
+    if prompt:
+        process_prompt(
+            prompt,
+            selected_agent,
+        )
+
+
+if __name__ == "__main__":
+    main()
