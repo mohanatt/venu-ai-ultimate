@@ -1,165 +1,187 @@
+from __future__ import annotations
+
 import os
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
+from groq import Groq
+from tavily import TavilyClient
 
-from agents import DEFAULT_GROQ_MODEL_ID, MasterAgent
+
+SUPPORTED_GROQ_MODELS = {
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
+}
+
+DEFAULT_GROQ_MODEL_ID = "openai/gpt-oss-20b"
 
 
-def get_groq_api_key() -> str:
-    """Read GROQ_API_KEY securely from Streamlit secrets or environment variables."""
+def get_secret(name: str) -> str:
+    """Read a secret from Streamlit or environment variables."""
     try:
-        value = st.secrets.get("GROQ_API_KEY")
+        value = st.secrets.get(name)
         if value:
             return str(value).strip()
     except Exception:
         pass
 
-    value = os.getenv("GROQ_API_KEY")
-    if value:
-        return str(value).strip()
-
-    return ""
+    return os.getenv(name, "").strip()
 
 
-def get_groq_model_id() -> str:
-    """Read GROQ_MODEL_ID from Streamlit secrets or environment variables with a valid fallback."""
-    try:
-        value = st.secrets.get("GROQ_MODEL_ID")
-        if value and str(value).strip():
-            return str(value).strip()
-    except Exception:
-        pass
+def resolve_model_id(model: Optional[str] = None) -> str:
+    candidate = (
+        model or get_secret("GROQ_MODEL_ID") or DEFAULT_GROQ_MODEL_ID
+    ).strip()
 
-    value = os.getenv("GROQ_MODEL_ID")
-    if value and str(value).strip():
-        return str(value).strip()
+    if candidate in SUPPORTED_GROQ_MODELS:
+        return candidate
 
     return DEFAULT_GROQ_MODEL_ID
 
 
-def build_sidebar() -> None:
-    st.sidebar.title("VENU AI ULTIMATE")
-    st.sidebar.caption("தமிழ் + English support")
-    st.sidebar.markdown(
-        """
-        - Real internet search with DuckDuckGo
-        - Groq-powered multi-agent workflow
-        - Current news, coding, and study support
-        - Streamlit Community Cloud friendly
-        """
-    )
+class GroqAgent:
+    """Groq-powered AI assistant."""
 
-    st.sidebar.markdown("### Agent")
-    agent = st.selectbox(
-        "Choose AI Agent",
-        ["Master Agent", "Internet Search Agent", "Coding Agent", "Study Agent"],
-    )
-    st.session_state.selected_agent = agent
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+    ):
+        self.api_key = api_key or get_secret("GROQ_API_KEY")
+        self.model = resolve_model_id(model)
+        self.client = Groq(api_key=self.api_key) if self.api_key else None
 
-    st.sidebar.caption(f"Groq model: {get_groq_model_id()}")
-    st.sidebar.markdown("### Groq API Key")
-    st.sidebar.code('GROQ_API_KEY = "your_key_here"')
-    st.sidebar.caption("Set this in Streamlit Cloud > Settings > Secrets")
-
-
-def render_search_results(results: List[Dict[str, Any]]) -> None:
-    if not results:
-        return
-
-    with st.expander("🔎 Internet Search Results", expanded=False):
-        for index, result in enumerate(results, start=1):
-            title = result.get("title") or "Untitled"
-            url = result.get("url") or ""
-            snippet = result.get("snippet") or "No summary available."
-            date_value = result.get("date") or "Date not available"
-
-            st.markdown(f"### {index}. {title}")
-            if url:
-                st.markdown(f"Source: [{url}]({url})")
-            st.write(snippet)
-            if date_value:
-                st.caption(f"Date: {date_value}")
-            st.markdown("---")
-
-
-def main() -> None:
-    st.set_page_config(
-        page_title="VENU AI ULTIMATE",
-        page_icon="🤖",
-        layout="wide",
-    )
-
-    build_sidebar()
-
-    st.title("🤖 VENU AI ULTIMATE")
-    st.caption("Your Personal Multi-Agent AI Assistant")
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {
-                "role": "assistant",
-                "content": "Hello! I can help with current news, coding, and study questions. Ask in Tamil or English.",
-            }
-        ]
-
-    if "master_agent" not in st.session_state:
-        groq_key = get_groq_api_key()
-        if not groq_key:
-            st.warning(
-                "Groq API key is missing. Add it in Streamlit Secrets or set the GROQ_API_KEY environment variable."
+    def generate(
+        self,
+        user_prompt: str,
+        system_prompt: str,
+        history: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
+        if not self.client:
+            raise ValueError(
+                "GROQ_API_KEY missing. Add it in Streamlit Secrets."
             )
-            st.stop()
 
-        model_id = get_groq_model_id()
-        st.session_state.master_agent = MasterAgent(api_key=groq_key, model=model_id)
+        messages = [{"role": "system", "content": system_prompt}]
 
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+        if history:
+            for item in history[-10:]:
+                role = item.get("role")
+                content = item.get("content")
 
-    prompt = st.chat_input("உங்கள் கேள்வியை உள்ளிடவும்... / Ask your question...")
+                if role in {"user", "assistant"} and content:
+                    messages.append({
+                        "role": role,
+                        "content": content,
+                    })
 
-    if prompt:
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+        messages.append({"role": "user", "content": user_prompt})
 
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=0.5,
+            max_tokens=1200,
+        )
+
+        return (response.choices[0].message.content or "").strip()
+
+
+class InternetSearchAgent:
+    """Search the web using Tavily."""
+
+    def __init__(self, max_results: int = 5):
+        self.max_results = max_results
+        self.api_key = get_secret("TAVILY_API_KEY")
+
+    def search(
+        self,
+        query: str,
+        max_results: Optional[int] = None,
+    ) -> List[Dict[str, str]]:
+        if not self.api_key:
+            raise RuntimeError(
+                "TAVILY_API_KEY missing. Add it in Streamlit Secrets."
+            )
+
+        client = TavilyClient(api_key=self.api_key)
+
+        response = client.search(
+            query=query,
+            topic="general",
+            search_depth="basic",
+            max_results=max_results or self.max_results,
+        )
+
+        results = []
+
+        for item in response.get("results", []):
+            url = (item.get("url") or "").strip()
+
+            if not url:
+                continue
+
+            results.append({
+                "title": item.get("title") or "Untitled",
+                "url": url,
+                "snippet": item.get("content") or "",
+                "date": (
+                    item.get("published_date")
+                    or "Date not available"
+                ),
+            })
+
+        return results
+
+
+class CodingAgent(GroqAgent):
+    def answer(self, question, history=None):
+        return self.generate(
+            question,
+            "You are an expert coding assistant. Explain code clearly. "
+            "Use simple Tamil when appropriate.",
+            history,
+        )
+
+
+class StudyAgent(GroqAgent):
+    def explain(self, topic, history=None):
+        return self.generate(
+            topic,
+            "You are a patient tutor. Explain subjects in simple Tamil "
+            "with examples and step-by-step instructions.",
+            history,
+        )
+
+
+class MasterAgent:
+    """Coordinates AI responses and Internet Search."""
+
+    def __init__(self, api_key=None, model=None):
+        self.groq_agent = GroqAgent(api_key, model)
+        self.search_agent = InternetSearchAgent()
+        self.coding_agent = CodingAgent(api_key, model)
+        self.study_agent = StudyAgent(api_key, model)
+
+    def handle_internet_search(self, query):
         try:
-            selected_agent = st.session_state.get("selected_agent", "Master Agent")
-            agent = st.session_state.master_agent
+            results = self.search_agent.search(query, max_results=5)
 
-            if selected_agent == "Internet Search Agent":
-                response = agent.handle_internet_search(prompt)
-            elif selected_agent == "Coding Agent":
-                response = agent.handle_coding(prompt, history=st.session_state.messages)
-            elif selected_agent == "Study Agent":
-                response = agent.handle_study(prompt, history=st.session_state.messages)
-            else:
-                response = agent.handle(prompt, history=st.session_state.messages)
+            if not results:
+                return {
+                    "answer": "தேடலுக்கான முடிவுகள் கிடைக்கவில்லை.",
+                    "search_results": [],
+                    "used_internet_search": True,
+                }
 
-            answer = response.get("answer", "I could not generate a response.")
-            results = response.get("search_results", [])
-
-            with st.chat_message("assistant"):
-                st.markdown(answer)
-                if response.get("used_internet_search"):
-                    render_search_results(results)
-
-            st.session_state.messages.append({"role": "assistant", "content": answer})
-
-        except ValueError as exc:
-            st.error(f"Groq configuration error: {exc}")
-            st.session_state.messages.append({"role": "assistant", "content": f"Groq configuration error: {exc}"})
-        except Exception as exc:
-            error_message = (
-                "I hit an error while processing your request. "
-                f"Details: {exc}"
+            context = "\n\n".join(
+                f"Title: {r['title']}\n"
+                f"URL: {r['url']}\n"
+                f"Information: {r['snippet']}"
+                for r in results
             )
-            with st.chat_message("assistant"):
-                st.error(error_message)
-            st.session_state.messages.append({"role": "assistant", "content": error_message})
 
+            answer = self.groq_agent.generate(
+                user_prompt
 
-if __name__ == "__main__":
-    main()
