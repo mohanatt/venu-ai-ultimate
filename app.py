@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
@@ -7,19 +7,35 @@ from agents import DEFAULT_GROQ_MODEL_ID, MasterAgent
 
 
 def get_groq_api_key() -> str:
-    """Read Groq API key securely from Streamlit secrets or environment variables."""
+    """Read GROQ_API_KEY securely from Streamlit secrets or environment variables."""
     try:
         value = st.secrets.get("GROQ_API_KEY")
         if value:
-            return str(value)
+            return str(value).strip()
     except Exception:
         pass
 
     value = os.getenv("GROQ_API_KEY")
     if value:
-        return str(value)
+        return str(value).strip()
 
     return ""
+
+
+def get_groq_model_id() -> str:
+    """Read GROQ_MODEL_ID from Streamlit secrets or environment variables with a valid fallback."""
+    try:
+        value = st.secrets.get("GROQ_MODEL_ID")
+        if value and str(value).strip():
+            return str(value).strip()
+    except Exception:
+        pass
+
+    value = os.getenv("GROQ_MODEL_ID")
+    if value and str(value).strip():
+        return str(value).strip()
+
+    return DEFAULT_GROQ_MODEL_ID
 
 
 def build_sidebar() -> None:
@@ -41,7 +57,7 @@ def build_sidebar() -> None:
     )
     st.session_state.selected_agent = agent
 
-    st.sidebar.caption(f"Groq model: {DEFAULT_GROQ_MODEL_ID}")
+    st.sidebar.caption(f"Groq model: {get_groq_model_id()}")
     st.sidebar.markdown("### Groq API Key")
     st.sidebar.code('GROQ_API_KEY = "your_key_here"')
     st.sidebar.caption("Set this in Streamlit Cloud > Settings > Secrets")
@@ -94,7 +110,9 @@ def main() -> None:
                 "Groq API key is missing. Add it in Streamlit Secrets or set the GROQ_API_KEY environment variable."
             )
             st.stop()
-        st.session_state.master_agent = MasterAgent(api_key=groq_key)
+
+        model_id = get_groq_model_id()
+        st.session_state.master_agent = MasterAgent(api_key=groq_key, model=model_id)
 
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
@@ -130,6 +148,9 @@ def main() -> None:
 
             st.session_state.messages.append({"role": "assistant", "content": answer})
 
+        except ValueError as exc:
+            st.error(f"Groq configuration error: {exc}")
+            st.session_state.messages.append({"role": "assistant", "content": f"Groq configuration error: {exc}"})
         except Exception as exc:
             error_message = (
                 "I hit an error while processing your request. "

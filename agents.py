@@ -6,7 +6,23 @@ from typing import Any, Dict, List, Optional
 from duckduckgo_search import DDGS
 from groq import Groq
 
-DEFAULT_GROQ_MODEL_ID = os.getenv("GROQ_MODEL_ID", "llama-3.1-8b-instant")
+SUPPORTED_GROQ_MODELS = {
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
+}
+
+DEFAULT_GROQ_MODEL_ID = "llama-3.3-70b-versatile"
+
+
+def resolve_model_id(model: Optional[str] = None) -> str:
+    """Resolve the model ID and fall back to a currently supported Groq model."""
+    candidate = (model or os.getenv("GROQ_MODEL_ID") or DEFAULT_GROQ_MODEL_ID).strip()
+    if candidate in SUPPORTED_GROQ_MODELS:
+        return candidate
+    return DEFAULT_GROQ_MODEL_ID
 
 
 class GroqAgent:
@@ -14,7 +30,7 @@ class GroqAgent:
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("GROQ_API_KEY")
-        self.model = model or DEFAULT_GROQ_MODEL_ID
+        self.model = resolve_model_id(model)
         self.client = Groq(api_key=self.api_key) if self.api_key else None
 
     def _build_messages(
@@ -60,7 +76,7 @@ class GroqAgent:
             if "model_not_found" in error_text or "404" in error_text or "not found" in error_text:
                 raise ValueError(
                     f"Groq model '{self.model}' is unavailable or not enabled for this account. "
-                    "Set GROQ_MODEL_ID to a valid supported model such as 'llama-3.1-8b-instant'."
+                    "Set GROQ_MODEL_ID to a current supported Groq model, for example 'llama-3.3-70b-versatile'."
                 ) from exc
             raise
 
@@ -114,7 +130,7 @@ class CodingAgent(GroqAgent):
     """Coding specialist for code generation and troubleshooting."""
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        super().__init__(api_key=api_key, model=model or DEFAULT_GROQ_MODEL_ID)
+        super().__init__(api_key=api_key, model=resolve_model_id(model))
 
     def answer(self, question: str, history: Optional[List[Dict[str, str]]] = None) -> str:
         system_prompt = (
@@ -128,7 +144,7 @@ class StudyAgent(GroqAgent):
     """Study specialist for learning and explanation."""
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        super().__init__(api_key=api_key, model=model or DEFAULT_GROQ_MODEL_ID)
+        super().__init__(api_key=api_key, model=resolve_model_id(model))
 
     def explain(self, topic: str, history: Optional[List[Dict[str, str]]] = None) -> str:
         system_prompt = (
@@ -143,7 +159,7 @@ class MasterAgent:
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("GROQ_API_KEY")
-        selected_model = model or DEFAULT_GROQ_MODEL_ID
+        selected_model = resolve_model_id(model)
         self.groq_agent = GroqAgent(api_key=self.api_key, model=selected_model)
         self.search_agent = InternetSearchAgent(max_results=5)
         self.coding_agent = CodingAgent(api_key=self.api_key, model=selected_model)
