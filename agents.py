@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
-from duckduckgo_search import DDGS
+from tavily import TavilyClient
 from groq import Groq
 
 SUPPORTED_GROQ_MODELS = {
@@ -85,46 +85,55 @@ class GroqAgent:
 
 
 class InternetSearchAgent:
-    """Search the internet using DuckDuckGo and return structured result metadata."""
+    """Search the web using Tavily."""
 
     def __init__(self, max_results: int = 5):
         self.max_results = max_results
+        self.api_key = os.getenv("TAVILY_API_KEY")
 
-    def search(self, query: str, max_results: Optional[int] = None) -> List[Dict[str, str]]:
-        try:
-            ddgs = DDGS()
-            requested_count = max_results or self.max_results
-            raw_results = ddgs.text(
-                query,
-                region="wt-wt",
-                safesearch="moderate",
-                timelimit="d",
-                max_results=requested_count,
+    def search(
+        self,
+        query: str,
+        max_results: Optional[int] = None,
+    ) -> List[Dict[str, str]]:
+
+        if not self.api_key:
+            raise RuntimeError(
+                "TAVILY_API_KEY is missing. Add it in Streamlit Secrets."
             )
 
-            results: List[Dict[str, str]] = []
-            for item in raw_results or []:
-                title = (item.get("title") or "Untitled").strip()
-                url = (item.get("href") or item.get("url") or "").strip()
-                snippet = (item.get("body") or item.get("snippet") or "No summary available.").strip()
-                date_value = item.get("date") or item.get("published") or ""
+        try:
+            client = TavilyClient(api_key=self.api_key)
 
-                if not url:
-                    continue
+            response = client.search(
+                query=query,
+                topic="news" if any(
+                    word in query.lower()
+                    for word in [
+                        "news", "today", "latest",
+                        "breaking", "செய்தி", "இன்று"
+                    ]
+                ) else "general",
+                search_depth="basic",
+                max_results=max_results or self.max_results,
+            )
 
-                results.append(
-                    {
-                        "title": title,
-                        "url": url,
-                        "snippet": snippet,
-                        "date": date_value,
-                    }
-                )
+            results = []
+
+            for item in response.get("results", []):
+                results.append({
+                    "title": item.get("title", "Untitled"),
+                    "url": item.get("url", ""),
+                    "snippet": item.get("content", ""),
+                    "date": item.get("published_date", "Date not available"),
+                })
 
             return results
-        except Exception as exc:
-            raise RuntimeError(f"Internet search failed: {exc}") from exc
 
+        except Exception as exc:
+            raise RuntimeError(
+                f"Tavily search failed: {exc}"
+            ) from exc
 
 class CodingAgent(GroqAgent):
     """Coding specialist for code generation and troubleshooting."""
