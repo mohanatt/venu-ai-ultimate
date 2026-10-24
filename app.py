@@ -241,7 +241,10 @@ def render_voice_assistant() -> Dict[str, Any]:
         st.info("Voice assistant is turned off. Use text input or enable voice in the sidebar.")
         return {}
 
-    html = f"""
+    speech_text_json = json.dumps(st.session_state.get("pending_speech", ""))
+    voice_enabled_str = str(st.session_state.get("voice_enabled", True)).lower()
+
+    html = """
     <div style="max-width: 520px; margin: 0 auto; padding: 14px; border-radius: 18px; background: linear-gradient(135deg, #0f172a, #1d4ed8); box-shadow: 0 8px 24px rgba(0,0,0,0.25);">
       <div style="display:flex; gap:12px; flex-wrap:wrap; justify-content:center; align-items:center;">
         <button id="voice-btn" style="border:none; border-radius:999px; padding:14px 18px; font-size:16px; font-weight:700; background:#f8fafc; color:#0f172a; cursor:pointer; min-width:180px;">🎙️ Voice Input</button>
@@ -253,39 +256,39 @@ def render_voice_assistant() -> Dict[str, Any]:
       const statusEl = document.getElementById('voice-status');
       const voiceBtn = document.getElementById('voice-btn');
       const stopBtn = document.getElementById('stop-btn');
-      const speechText = {json.dumps(st.session_state.get('pending_speech', ''))};
-      const voiceEnabled = {str(st.session_state.get('voice_enabled', True)).lower()};
+      const speechText = %s;
+      const voiceEnabled = %s;
 
-      function setStatus(message) {{
+      function setStatus(message) {
         statusEl.textContent = message;
-      }}
+      }
 
-      function stopSpeech() {{
-        if ('speechSynthesis' in window) {{
+      function stopSpeech() {
+        if ('speechSynthesis' in window) {
           window.speechSynthesis.cancel();
-        }}
-      }}
+        }
+      }
 
-      if (speechText && voiceEnabled) {{
+      if (speechText && voiceEnabled) {
         stopSpeech();
         const utterance = new SpeechSynthesisUtterance(speechText);
         utterance.lang = /[\u0B80-\u0BFF]/.test(speechText) ? 'ta-IN' : 'en-IN';
         utterance.rate = 1;
         utterance.pitch = 1;
         utterance.onstart = () => setStatus('Speaking...');
-        utterance.onend = () => {{
+        utterance.onend = () => {
           setStatus('Voice assistant ready');
-          Streamlit.setComponentValue({{ speech_done: true }});
-        }};
+          Streamlit.setComponentValue({ speech_done: true });
+        };
         window.speechSynthesis.speak(utterance);
-      }}
+      }
 
-      function startVoiceRecognition(index = 0) {{
+      function startVoiceRecognition(index = 0) {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) {{
+        if (!SpeechRecognition) {
           setStatus('Speech recognition is not supported in this browser.');
           return;
-        }}
+        }
 
         const recognition = new SpeechRecognition();
         const langList = ['ta-IN', 'en-IN'];
@@ -293,53 +296,53 @@ def render_voice_assistant() -> Dict[str, Any]:
         recognition.interimResults = false;
         recognition.continuous = false;
 
-        recognition.onstart = () => {{
+        recognition.onstart = () => {
           setStatus('Listening...');
           voiceBtn.textContent = '🎙️ Listening';
-        }};
+        };
 
-        recognition.onresult = (event) => {{
+        recognition.onresult = (event) => {
           const transcript = event.results[0][0].transcript.trim();
-          if (transcript) {{
+          if (transcript) {
             setStatus('Captured: ' + transcript);
-            Streamlit.setComponentValue({{ transcript: transcript }});
-          }}
-        }};
+            Streamlit.setComponentValue({ transcript: transcript });
+          }
+        };
 
-        recognition.onerror = (event) => {{
-          if (index < langList.length - 1) {{
+        recognition.onerror = (event) => {
+          if (index < langList.length - 1) {
             startVoiceRecognition(index + 1);
-          }} else {{
+          } else {
             setStatus('Voice capture failed: ' + event.error);
             voiceBtn.textContent = '🎙️ Voice Input';
-          }}
-        }};
+          }
+        };
 
-        recognition.onend = () => {{
+        recognition.onend = () => {
           voiceBtn.textContent = '🎙️ Voice Input';
-          if (!statusEl.textContent.includes('Captured:')) {{
+          if (!statusEl.textContent.includes('Captured:')) {
             setStatus('Voice assistant ready');
-          }}
-        }};
+          }
+        };
 
         recognition.start();
       }
 
-      voiceBtn.addEventListener('click', () => {{
-        if (!voiceEnabled) {{
+      voiceBtn.addEventListener('click', () => {
+        if (!voiceEnabled) {
           setStatus('Voice is switched off from the sidebar.');
           return;
-        }}
+        }
         startVoiceRecognition(0);
-      }});
+      });
 
-      stopBtn.addEventListener('click', () => {{
+      stopBtn.addEventListener('click', () => {
         stopSpeech();
         setStatus('Speaking stopped');
-        Streamlit.setComponentValue({{ speech_done: true }});
-      }});
+        Streamlit.setComponentValue({ speech_done: true });
+      });
     </script>
-    """
+    """ % (speech_text_json, voice_enabled_str)
 
     component_value = component_html(html, height=150, key="voice_component")
     return component_value if isinstance(component_value, dict) else {}
