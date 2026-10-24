@@ -7,7 +7,7 @@ from agents import MasterAgent
 
 
 def get_groq_api_key() -> str:
-    """Read the Groq API key securely from Streamlit secrets or environment variables."""
+    """Read Groq API key securely from Streamlit secrets or environment variables."""
     try:
         value = st.secrets.get("GROQ_API_KEY")
         if value:
