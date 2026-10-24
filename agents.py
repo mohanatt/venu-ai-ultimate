@@ -6,13 +6,15 @@ from typing import Any, Dict, List, Optional
 from duckduckgo_search import DDGS
 from groq import Groq
 
+DEFAULT_GROQ_MODEL_ID = os.getenv("GROQ_MODEL_ID", "llama-3.1-8b-instant")
+
 
 class GroqAgent:
     """Base class for Groq-powered conversation agents."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("GROQ_API_KEY")
-        self.model = model
+        self.model = model or DEFAULT_GROQ_MODEL_ID
         self.client = Groq(api_key=self.api_key) if self.api_key else None
 
     def _build_messages(
@@ -45,12 +47,23 @@ class GroqAgent:
             )
 
         messages = self._build_messages(user_prompt, system_prompt, history)
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=0.7,
-            max_tokens=800,
-        )
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=0.7,
+                max_tokens=800,
+            )
+        except Exception as exc:
+            error_text = str(exc).lower()
+            if "model_not_found" in error_text or "404" in error_text or "not found" in error_text:
+                raise ValueError(
+                    f"Groq model '{self.model}' is unavailable or not enabled for this account. "
+                    "Set GROQ_MODEL_ID to a valid supported model such as 'llama-3.1-8b-instant'."
+                ) from exc
+            raise
+
         content = response.choices[0].message.content
         return (content or "").strip()
 
@@ -100,8 +113,8 @@ class InternetSearchAgent:
 class CodingAgent(GroqAgent):
     """Coding specialist for code generation and troubleshooting."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "llama-3.3-70b-versatile"):
-        super().__init__(api_key=api_key, model=model)
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        super().__init__(api_key=api_key, model=model or DEFAULT_GROQ_MODEL_ID)
 
     def answer(self, question: str, history: Optional[List[Dict[str, str]]] = None) -> str:
         system_prompt = (
@@ -114,13 +127,13 @@ class CodingAgent(GroqAgent):
 class StudyAgent(GroqAgent):
     """Study specialist for learning and explanation."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "llama-3.3-70b-versatile"):
-        super().__init__(api_key=api_key, model=model)
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        super().__init__(api_key=api_key, model=model or DEFAULT_GROQ_MODEL_ID)
 
     def explain(self, topic: str, history: Optional[List[Dict[str, str]]] = None) -> str:
         system_prompt = (
-            "You are a patient tutor. Explain concepts clearly in simple Tamil when helpful. Use examples and step-by-step explanations. "
-            "Keep the answer easy to understand."
+            "You are a patient tutor. Explain concepts clearly in simple Tamil when helpful. "
+            "Use examples and step-by-step explanations. Keep the answer easy to understand."
         )
         return self.generate(topic, system_prompt=system_prompt, history=history)
 
@@ -128,12 +141,13 @@ class StudyAgent(GroqAgent):
 class MasterAgent:
     """Main orchestrator for all agents."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.getenv("GROQ_API_KEY")
-        self.groq_agent = GroqAgent(api_key=self.api_key, model=model)
+        selected_model = model or DEFAULT_GROQ_MODEL_ID
+        self.groq_agent = GroqAgent(api_key=self.api_key, model=selected_model)
         self.search_agent = InternetSearchAgent(max_results=5)
-        self.coding_agent = CodingAgent(api_key=self.api_key, model=model)
-        self.study_agent = StudyAgent(api_key=self.api_key, model=model)
+        self.coding_agent = CodingAgent(api_key=self.api_key, model=selected_model)
+        self.study_agent = StudyAgent(api_key=self.api_key, model=selected_model)
 
     @staticmethod
     def _is_news_or_current_request(user_input: str) -> bool:

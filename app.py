@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 
 import streamlit as st
 
-from agents import MasterAgent
+from agents import DEFAULT_GROQ_MODEL_ID, MasterAgent
 
 
 def get_groq_api_key() -> str:
@@ -41,6 +41,7 @@ def build_sidebar() -> None:
     )
     st.session_state.selected_agent = agent
 
+    st.sidebar.caption(f"Groq model: {DEFAULT_GROQ_MODEL_ID}")
     st.sidebar.markdown("### Groq API Key")
     st.sidebar.code('GROQ_API_KEY = "your_key_here"')
     st.sidebar.caption("Set this in Streamlit Cloud > Settings > Secrets")
