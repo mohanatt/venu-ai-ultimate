@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Dict, List
 
 import streamlit as st
@@ -20,7 +21,7 @@ st.set_page_config(
 def get_secret(name: str, default: str = "") -> str:
     """Read a value from Streamlit Secrets or environment variables."""
     try:
-        if hasattr(st, "secrets"):
+        if hasattr(st, "secrets") and name in st.secrets:
             value = st.secrets.get(name)
             if value is not None:
                 return str(value).strip()
@@ -41,6 +42,14 @@ def get_groq_model_id() -> str:
 
 def get_tavily_api_key() -> str:
     return get_secret("TAVILY_API_KEY")
+
+
+def clean_markdown_for_speech(text: str) -> str:
+    """Remove markdown symbols and code blocks so audio speaks naturally."""
+    clean = re.sub(r"```[\s\S]*?```", " Code snippet provided. ", text)
+    clean = re.sub(r"`.*?`", "", clean)
+    clean = re.sub(r"[#*_~>\[\]\(\)]", " ", clean)
+    return " ".join(clean.split())
 
 
 def initialize_app_state() -> None:
@@ -66,24 +75,20 @@ def initialize_app_state() -> None:
     if "last_voice_transcript" not in st.session_state:
         st.session_state.last_voice_transcript = ""
 
-    if "last_speech_done" not in st.session_state:
-        st.session_state.last_speech_done = False
-
 
 def build_sidebar() -> str:
     st.sidebar.title("🤖 VENU AI ULTIMATE")
-    st.sidebar.caption("Siri-style Android voice assistant")
+    st.sidebar.caption("Personal AI Assistant | Tamil Nadu")
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ✨ Features")
     st.sidebar.markdown(
         """
-        - 🎙️ Voice input (Tamil + English)
-        - 🔊 Text to speech
-        - 🌐 Internet Search
-        - 💻 Coding assistance
-        - 📚 Study assistance
-        - 🇮🇳 Mobile-first UI
+        - 🎙️ Voice Input (Web Speech API)
+        - 🔊 Text to Speech (Tamil & English)
+        - 🌐 Internet Search (Tavily)
+        - 💻 Coding Specialist
+        - 📚 Study Assistant
         """
     )
 
@@ -102,31 +107,27 @@ def build_sidebar() -> str:
 
     st.sidebar.markdown("---")
     st.sidebar.checkbox(
-        "🔊 Voice assistant on",
+        "🔊 Voice Assistant (Speech Output)",
         value=st.session_state.get("voice_enabled", True),
         key="voice_enabled",
     )
 
-    st.sidebar.caption(f"Groq Model: {get_groq_model_id()}")
+    st.sidebar.caption(f"Groq Model: `{get_groq_model_id()}`")
 
     if get_tavily_api_key():
-        st.sidebar.caption("Tavily API: configured")
+        st.sidebar.caption("🟢 Tavily Search: Active")
     else:
-        st.sidebar.caption("Tavily API: not configured")
-
-    st.sidebar.info(
-        "API keys are stored in Streamlit Secrets. Never share them publicly."
-    )
+        st.sidebar.caption("⚪ Tavily Search: Not Configured")
 
     if st.sidebar.button("🛑 Stop Speaking"):
         st.session_state.pending_speech = ""
-        st.session_state.last_speech_done = False
+        st.rerun()
 
     if st.sidebar.button("🗑️ Clear Chat"):
         st.session_state.messages = [
             {
                 "role": "assistant",
-                "content": ("வணக்கம்! நான் VENU AI. என்ன உதவி வேண்டும்?"),
+                "content": "வணக்கம்! நான் VENU AI. என்ன உதவி வேண்டும்?",
             }
         ]
         st.session_state.pending_speech = ""
@@ -139,19 +140,19 @@ def render_search_results(results: List[Dict[str, Any]]) -> None:
     if not results:
         return
 
-    with st.expander("🌐 Internet Search Results", expanded=True):
+    with st.expander("🌐 Internet Search Results", expanded=False):
         for index, result in enumerate(results, start=1):
             title = result.get("title", "Untitled")
             url = result.get("url", "")
             snippet = result.get("snippet", "No summary available.")
             date_value = result.get("date", "Date not available")
 
-            st.markdown(f"### {index}. {title}")
+            st.markdown(f"**{index}. {title}**")
             if url:
-                st.markdown(f"[🔗 Open Source]({url})")
+                st.markdown(f"[🔗 Open Link]({url})")
             if snippet:
-                st.write(snippet)
-            st.caption(f"Date: {date_value}")
+                st.caption(snippet)
+            st.caption(f"📅 {date_value}")
             st.markdown("---")
 
 
@@ -161,11 +162,11 @@ def initialize_agent() -> None:
 
     groq_key = get_groq_api_key()
     if not groq_key:
-        st.error("GROQ_API_KEY is missing. Add it in Streamlit Secrets.")
+        st.error("⚠️ GROQ_API_KEY is missing. Add it in Streamlit Secrets or Environment.")
         st.code(
-            'GROQ_API_KEY = "your_groq_api_key"\n'
-            'GROQ_MODEL_ID = "openai/gpt-oss-20b"\n'
-            'TAVILY_API_KEY = "your_tavily_api_key"',
+            'GROQ_API_KEY = "gsk_..."\n'
+            'GROQ_MODEL_ID = "llama-3.3-70b-versatile"\n'
+            'TAVILY_API_KEY = "tvly-..."',
             language="toml",
         )
         st.stop()
@@ -177,7 +178,7 @@ def initialize_agent() -> None:
             search_api_key=get_tavily_api_key(),
         )
     except Exception as exc:
-        st.error(f"AI initialization failed: {exc}")
+        st.error(f"AI Initialization Failed: {exc}")
         st.stop()
 
 
@@ -187,8 +188,8 @@ def render_chat_history() -> None:
             st.markdown(message["content"])
 
 
-def process_prompt(prompts: str, selected_agent: str) -> None:
-    prompt = str(prompts).strip()
+def process_prompt(prompt_text: str, selected_agent: str) -> None:
+    prompt = str(prompt_text).strip()
     if not prompt:
         return
 
@@ -198,13 +199,13 @@ def process_prompt(prompts: str, selected_agent: str) -> None:
         st.markdown(prompt)
 
     history = st.session_state.messages[:-1]
-    agent = st.session_state.master_agent
+    agent: MasterAgent = st.session_state.master_agent
 
     with st.chat_message("assistant"):
         with st.spinner("VENU AI பதில் உருவாக்குகிறது..."):
             try:
                 if selected_agent == "Internet Search Agent":
-                    response = agent.handle_internet_search(prompt)
+                    response = agent.handle_internet_search(prompt, history=history)
                 elif selected_agent == "Coding Agent":
                     response = agent.handle_coding(prompt, history=history)
                 elif selected_agent == "Study Agent":
@@ -221,14 +222,12 @@ def process_prompt(prompts: str, selected_agent: str) -> None:
                 st.session_state.messages.append(
                     {"role": "assistant", "content": answer}
                 )
-                st.session_state.pending_speech = answer
-                st.session_state.last_speech_done = False
+
+                if st.session_state.get("voice_enabled", True):
+                    st.session_state.pending_speech = clean_markdown_for_speech(answer)
 
             except Exception as exc:
-                error_message = (
-                    "பதில் உருவாக்கும்போது பிழை ஏற்பட்டது.\n\n"
-                    f"விவரம்: {exc}"
-                )
+                error_message = f"பதில் உருவாக்கும்போது பிழை ஏற்பட்டது: {exc}"
                 st.error(error_message)
                 st.session_state.messages.append(
                     {"role": "assistant", "content": error_message}
@@ -236,146 +235,73 @@ def process_prompt(prompts: str, selected_agent: str) -> None:
                 st.session_state.pending_speech = ""
 
 
-def render_voice_assistant() -> Dict[str, Any]:
+def render_voice_assistant() -> None:
     if not st.session_state.get("voice_enabled", True):
-        st.info("Voice assistant is turned off. Use text input or enable voice in the sidebar.")
-        return {}
+        return
 
-    speech_text_json = json.dumps(st.session_state.get("pending_speech", ""))
-    voice_enabled_str = str(st.session_state.get("voice_enabled", True)).lower()
+    speech_text = st.session_state.get("pending_speech", "")
+    speech_text_json = json.dumps(speech_text)
 
-    html = """
-    <div style="max-width: 520px; margin: 0 auto; padding: 14px; border-radius: 18px; background: linear-gradient(135deg, #0f172a, #1d4ed8); box-shadow: 0 8px 24px rgba(0,0,0,0.25);">
-      <div style="display:flex; gap:12px; flex-wrap:wrap; justify-content:center; align-items:center;">
-        <button id="voice-btn" style="border:none; border-radius:999px; padding:14px 18px; font-size:16px; font-weight:700; background:#f8fafc; color:#0f172a; cursor:pointer; min-width:180px;">🎙️ Voice Input</button>
-        <button id="stop-btn" style="border:none; border-radius:999px; padding:14px 18px; font-size:16px; font-weight:700; background:#ef4444; color:white; cursor:pointer;">🛑 Stop Speaking</button>
+    html = f"""
+    <div style="margin: 10px 0; padding: 12px; border-radius: 12px; background: #1e293b; color: white; display: flex; align-items: center; justify-content: space-between;">
+      <span id="voice-status" style="font-size: 14px; font-weight: 500;">🔊 Voice Assistant Active</span>
+      <div>
+        <button id="stop-btn" style="border: none; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: bold; background: #ef4444; color: white; cursor: pointer;">🛑 Stop Voice</button>
       </div>
-      <div id="voice-status" style="margin-top:12px; text-align:center; color:#e2e8f0; font-size:13px; font-weight:600; min-height:18px;">Voice assistant ready</div>
     </div>
     <script>
       const statusEl = document.getElementById('voice-status');
-      const voiceBtn = document.getElementById('voice-btn');
       const stopBtn = document.getElementById('stop-btn');
-      const speechText = %s;
-      const voiceEnabled = %s;
+      const speechText = {speech_text_json};
 
-      function setStatus(message) {
-        statusEl.textContent = message;
-      }
-
-      function stopSpeech() {
-        if ('speechSynthesis' in window) {
+      function stopSpeech() {{
+        if ('speechSynthesis' in window) {{
           window.speechSynthesis.cancel();
-        }
-      }
+        }}
+      }}
 
-      if (speechText && voiceEnabled) {
+      if (speechText && speechText.trim().length > 0) {{
         stopSpeech();
         const utterance = new SpeechSynthesisUtterance(speechText);
         utterance.lang = /[\u0B80-\u0BFF]/.test(speechText) ? 'ta-IN' : 'en-IN';
-        utterance.rate = 1;
-        utterance.pitch = 1;
-        utterance.onstart = () => setStatus('Speaking...');
-        utterance.onend = () => {
-          setStatus('Voice assistant ready');
-          Streamlit.setComponentValue({ speech_done: true });
-        };
+        utterance.rate = 1.0;
+        utterance.onstart = () => {{
+          statusEl.textContent = 'Speaking...';
+        }};
+        utterance.onend = () => {{
+          statusEl.textContent = 'Voice Assistant Ready';
+        }};
+        utterance.onerror = () => {{
+          statusEl.textContent = 'Voice playback error';
+        }};
         window.speechSynthesis.speak(utterance);
-      }
+      }}
 
-      function startVoiceRecognition(index = 0) {
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-          setStatus('Speech recognition is not supported in this browser.');
-          return;
-        }
-
-        const recognition = new SpeechRecognition();
-        const langList = ['ta-IN', 'en-IN'];
-        recognition.lang = langList[index] || 'en-IN';
-        recognition.interimResults = false;
-        recognition.continuous = false;
-
-        recognition.onstart = () => {
-          setStatus('Listening...');
-          voiceBtn.textContent = '🎙️ Listening';
-        };
-
-        recognition.onresult = (event) => {
-          const transcript = event.results[0][0].transcript.trim();
-          if (transcript) {
-            setStatus('Captured: ' + transcript);
-            Streamlit.setComponentValue({ transcript: transcript });
-          }
-        };
-
-        recognition.onerror = (event) => {
-          if (index < langList.length - 1) {
-            startVoiceRecognition(index + 1);
-          } else {
-            setStatus('Voice capture failed: ' + event.error);
-            voiceBtn.textContent = '🎙️ Voice Input';
-          }
-        };
-
-        recognition.onend = () => {
-          voiceBtn.textContent = '🎙️ Voice Input';
-          if (!statusEl.textContent.includes('Captured:')) {
-            setStatus('Voice assistant ready');
-          }
-        };
-
-        recognition.start();
-      }
-
-      voiceBtn.addEventListener('click', () => {
-        if (!voiceEnabled) {
-          setStatus('Voice is switched off from the sidebar.');
-          return;
-        }
-        startVoiceRecognition(0);
-      });
-
-      stopBtn.addEventListener('click', () => {
+      stopBtn.addEventListener('click', () => {{
         stopSpeech();
-        setStatus('Speaking stopped');
-        Streamlit.setComponentValue({ speech_done: true });
-      });
+        statusEl.textContent = 'Voice Stopped';
+      }});
     </script>
-    """ % (speech_text_json, voice_enabled_str)
-
-    component_value = component_html(html, height=150, key="voice_component")
-    return component_value if isinstance(component_value, dict) else {}
+    """
+    component_html(html, height=75)
 
 
 def main() -> None:
     initialize_app_state()
+    initialize_agent()
     selected_agent = build_sidebar()
 
     st.title("🤖 VENU AI ULTIMATE")
     st.caption("Your Personal Multi-Agent AI Assistant | தமிழ் + English")
     st.markdown("---")
 
-    voice_result = render_voice_assistant()
-    if isinstance(voice_result, dict):
-        transcript = str(voice_result.get("transcript", "")).strip()
-        speech_done = bool(voice_result.get("speech_done"))
-
-        if transcript and transcript != st.session_state.get("last_voice_transcript"):
-            st.session_state.last_voice_transcript = transcript
-            process_prompt(transcript, selected_agent)
-
-        if speech_done:
-            st.session_state.pending_speech = ""
-            st.session_state.last_speech_done = True
-
+    render_voice_assistant()
     render_chat_history()
 
     prompt = st.chat_input("உங்கள் கேள்வியை உள்ளிடவும்... / Ask your question...")
     if prompt:
         process_prompt(prompt, selected_agent)
-
-    initialize_agent()
+        st.rerun()
 
 
 if __name__ == "__main__":
