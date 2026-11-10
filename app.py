@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 import streamlit as st
 from streamlit.components.v1 import html as component_html
 
-from agents import DEFAULT_GROQ_MODEL_ID, MasterAgent
+from agents import MasterAgent, get_secret
 
 
 st.set_page_config(
@@ -18,26 +18,12 @@ st.set_page_config(
 )
 
 
-def get_secret(name: str, default: str = "") -> str:
-    """Read a value from Streamlit Secrets or environment variables."""
-    try:
-        if hasattr(st, "secrets") and name in st.secrets:
-            value = st.secrets.get(name)
-            if value is not None:
-                return str(value).strip()
-    except Exception:
-        pass
-
-    env_value = os.getenv(name, default)
-    return str(env_value).strip() if env_value is not None else ""
-
-
 def get_groq_api_key() -> str:
     return get_secret("GROQ_API_KEY")
 
 
 def get_groq_model_id() -> str:
-    return get_secret("GROQ_MODEL_ID", DEFAULT_GROQ_MODEL_ID)
+    return get_secret("GROQ_MODEL_ID")
 
 
 def get_tavily_api_key() -> str:
@@ -45,7 +31,7 @@ def get_tavily_api_key() -> str:
 
 
 def clean_markdown_for_speech(text: str) -> str:
-    """Remove markdown symbols and code blocks so audio speaks naturally."""
+    """Strip markdown formatting and code blocks so browser speech sounds natural."""
     clean = re.sub(r"```[\s\S]*?```", " Code snippet provided. ", text)
     clean = re.sub(r"`.*?`", "", clean)
     clean = re.sub(r"[#*_~>\[\]\(\)]", " ", clean)
@@ -72,8 +58,41 @@ def initialize_app_state() -> None:
     if "pending_speech" not in st.session_state:
         st.session_state.pending_speech = ""
 
-    if "last_voice_transcript" not in st.session_state:
-        st.session_state.last_voice_transcript = ""
+
+def initialize_agent() -> None:
+    """Create or refresh MasterAgent if settings change or if missing."""
+    groq_key = get_groq_api_key()
+    if not groq_key:
+        st.error("⚠️ GROQ_API_KEY is missing. Add it in Streamlit Secrets.")
+        st.code(
+            'GROQ_API_KEY = "gsk_..."\n'
+            'GROQ_MODEL_ID = "llama-3.1-8b-instant"\n'
+            'TAVILY_API_KEY = "tvly-..."',
+            language="toml",
+        )
+        st.stop()
+
+    configured_model = get_groq_model_id()
+    
+    # Cache invalidation check: Recreate agent if model preference or key changed
+    needs_refresh = (
+        "master_agent" not in st.session_state
+        or st.session_state.get("_cached_groq_key") != groq_key
+        or (configured_model and st.session_state.get("_cached_model") != configured_model)
+    )
+
+    if needs_refresh:
+        try:
+            st.session_state.master_agent = MasterAgent(
+                api_key=groq_key,
+                model=configured_model or None,
+                search_api_key=get_tavily_api_key(),
+            )
+            st.session_state._cached_groq_key = groq_key
+            st.session_state._cached_model = configured_model
+        except Exception as exc:
+            st.error(f"AI Initialization Failed: {exc}")
+            st.stop()
 
 
 def build_sidebar() -> str:
@@ -112,7 +131,8 @@ def build_sidebar() -> str:
         key="voice_enabled",
     )
 
-    st.sidebar.caption(f"Groq Model: `{get_groq_model_id()}`")
+    active_model = getattr(st.session_state.get("master_agent"), "current_model", "Auto-Detecting...")
+    st.sidebar.caption(f"Active Model: `{active_model}`")
 
     if get_tavily_api_key():
         st.sidebar.caption("🟢 Tavily Search: Active")
@@ -154,32 +174,6 @@ def render_search_results(results: List[Dict[str, Any]]) -> None:
                 st.caption(snippet)
             st.caption(f"📅 {date_value}")
             st.markdown("---")
-
-
-def initialize_agent() -> None:
-    if "master_agent" in st.session_state:
-        return
-
-    groq_key = get_groq_api_key()
-    if not groq_key:
-        st.error("⚠️ GROQ_API_KEY is missing. Add it in Streamlit Secrets or Environment.")
-        st.code(
-            'GROQ_API_KEY = "gsk_..."\n'
-            'GROQ_MODEL_ID = "llama-3.3-70b-versatile"\n'
-            'TAVILY_API_KEY = "tvly-..."',
-            language="toml",
-        )
-        st.stop()
-
-    try:
-        st.session_state.master_agent = MasterAgent(
-            api_key=groq_key,
-            model=get_groq_model_id(),
-            search_api_key=get_tavily_api_key(),
-        )
-    except Exception as exc:
-        st.error(f"AI Initialization Failed: {exc}")
-        st.stop()
 
 
 def render_chat_history() -> None:
@@ -306,3 +300,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    
