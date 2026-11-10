@@ -7,15 +7,15 @@ import streamlit as st
 from groq import Groq
 from tavily import TavilyClient
 
-# Standard supported Groq models
-SUPPORTED_GROQ_MODELS = {
-    "llama-3.3-70b-versatile",
+# Fallback models in priority order
+PREFERRED_GROQ_MODELS = [
     "llama-3.1-8b-instant",
     "mixtral-8x7b-32768",
     "gemma2-9b-it",
-}
+    "llama-3.3-70b-versatile",
+]
 
-DEFAULT_GROQ_MODEL_ID = "mixtral-8x7b-32768"
+DEFAULT_FALLBACK_MODEL = "llama-3.1-8b-instant"
 
 
 def get_secret(name: str, default: str = "") -> str:
@@ -32,16 +32,8 @@ def get_secret(name: str, default: str = "") -> str:
     return str(env_value).strip() if env_value is not None else ""
 
 
-def resolve_model_id(model: Optional[str] = None) -> str:
-    candidate = (
-        model or get_secret("GROQ_MODEL_ID", "mixtral-8x7b-32768")
-    ).strip()
-    return candidate if candidate else "mixtral-8x7b-32768"
-
-
-
 class GroqAgent:
-    """Groq-powered AI assistant."""
+    """Groq-powered AI assistant with dynamic model auto-discovery."""
 
     def __init__(
         self,
@@ -49,8 +41,36 @@ class GroqAgent:
         model: Optional[str] = None,
     ):
         self.api_key = (api_key or get_secret("GROQ_API_KEY")).strip()
-        self.model = resolve_model_id(model)
         self.client = Groq(api_key=self.api_key) if self.api_key else None
+        self.model = self._select_working_model(model)
+
+    def _select_working_model(self, preferred_model: Optional[str]) -> str:
+        """Fetch working models from Groq API to avoid 404/400 decommissioned errors."""
+        target_model = preferred_model or get_secret("GROQ_MODEL_ID")
+
+        if not self.client:
+            return target_model or DEFAULT_FALLBACK_MODEL
+
+        try:
+            live_models = [m.id for m in self.client.models.list().data]
+
+            # 1. User preferred model if active
+            if target_model and target_model in live_models:
+                return target_model
+
+            # 2. Match best active fallback model
+            for m in PREFERRED_GROQ_MODELS:
+                if m in live_models:
+                    return m
+
+            # 3. If none matched, pick first available model
+            if live_models:
+                return live_models[0]
+
+        except Exception:
+            pass
+
+        return target_model or DEFAULT_FALLBACK_MODEL
 
     def generate(
         self,
@@ -83,12 +103,23 @@ class GroqAgent:
             "content": str(user_prompt),
         })
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=0.5,
-            max_tokens=1200,
-        )
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=0.5,
+                max_tokens=1200,
+            )
+        except Exception:
+            # Fallback to secondary model if current model experiences rate-limit or decommission
+            fallback = DEFAULT_FALLBACK_MODEL if self.model != DEFAULT_FALLBACK_MODEL else "mixtral-8x7b-32768"
+            response = self.client.chat.completions.create(
+                model=fallback,
+                messages=messages,
+                temperature=0.5,
+                max_tokens=1200,
+            )
+            self.model = fallback
 
         choice = response.choices[0]
         message = getattr(choice, "message", None)
@@ -139,22 +170,21 @@ class InternetSearchAgent:
             ]
         ) else "general"
 
-        results_limit = max_results or self.max_results
+        limit = max_results or self.max_results
 
         try:
             response = self.client.search(
                 query=query_text,
                 topic=topic,
                 search_depth="basic",
-                max_results=results_limit,
+                max_results=limit,
             )
         except TypeError:
-            # Fallback for older tavily-python SDK parameter names
             response = self.client.search(
                 query=query_text,
                 topic=topic,
                 search_depth="basic",
-                num_results=results_limit,
+                num_results=limit,
             )
         except Exception as exc:
             raise RuntimeError(f"Tavily search failed: {exc}") from exc
@@ -186,14 +216,12 @@ class InternetSearchAgent:
                 or "Date not available"
             )
 
-            normalized.append(
-                {
-                    "title": title,
-                    "url": url,
-                    "snippet": str(snippet),
-                    "date": str(date_value),
-                }
-            )
+            normalized.append({
+                "title": title,
+                "url": url,
+                "snippet": str(snippet),
+                "date": str(date_value),
+            })
 
         return normalized
 
@@ -230,12 +258,18 @@ class MasterAgent:
         search_api_key: Optional[str] = None,
     ):
         self.groq_agent = GroqAgent(api_key=api_key, model=model)
-        self.coding_agent = CodingAgent(api_key=api_key, model=model)
-        self.study_agent = StudyAgent(api_key=api_key, model=model)
+        # Inherit the dynamically discovered model for sub-agents
+        active_model = self.groq_agent.model
+        self.coding_agent = CodingAgent(api_key=api_key, model=active_model)
+        self.study_agent = StudyAgent(api_key=api_key, model=active_model)
         self.search_agent = InternetSearchAgent(
             api_key=search_api_key or get_secret("TAVILY_API_KEY"),
             max_results=5,
         )
+
+    @property
+    def current_model(self) -> str:
+        return self.groq_agent.model
 
     def _generic_answer(
         self,
@@ -390,4 +424,4 @@ class MasterAgent:
             return self.handle_study(prompt, history)
 
         return self._generic_answer(prompt, history)
-        
+    
