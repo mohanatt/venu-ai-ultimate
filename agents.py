@@ -7,20 +7,21 @@ import streamlit as st
 from groq import Groq
 from tavily import TavilyClient
 
-
+# Standard supported Groq models
 SUPPORTED_GROQ_MODELS = {
-    "openai/gpt-oss-20b",
-    "openai/gpt-oss-120b",
-    "qwen/qwen3.8-27b",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
 }
 
-DEFAULT_GROQ_MODEL_ID = "openai/gpt-oss-20b"
+DEFAULT_GROQ_MODEL_ID = "llama-3.3-70b-versatile"
 
 
 def get_secret(name: str, default: str = "") -> str:
     """Read secrets from Streamlit or environment variables."""
     try:
-        if hasattr(st, "secrets"):
+        if hasattr(st, "secrets") and name in st.secrets:
             value = st.secrets.get(name)
             if value is not None:
                 return str(value).strip()
@@ -65,7 +66,7 @@ class GroqAgent:
     ) -> str:
         if not self.client:
             raise ValueError(
-                "GROQ_API_KEY missing. Add it in Streamlit Secrets."
+                "GROQ_API_KEY missing. Add it in Streamlit Secrets or Environment Variables."
             )
 
         messages: List[Dict[str, str]] = [
@@ -115,15 +116,16 @@ class InternetSearchAgent:
     def __init__(self, api_key: Optional[str] = None, max_results: int = 5):
         self.api_key = (api_key or get_secret("TAVILY_API_KEY")).strip()
         self.max_results = max_results
+        self.client = TavilyClient(api_key=self.api_key) if self.api_key else None
 
     def search(
         self,
         query: str,
         max_results: Optional[int] = None,
     ) -> List[Dict[str, str]]:
-        if not self.api_key:
+        if not self.client:
             raise RuntimeError(
-                "TAVILY_API_KEY missing. Add it in Streamlit Secrets."
+                "TAVILY_API_KEY missing. Add it in Streamlit Secrets or Environment Variables."
             )
 
         query_text = str(query or "").strip()
@@ -143,23 +145,22 @@ class InternetSearchAgent:
             ]
         ) else "general"
 
+        results_limit = max_results or self.max_results
+
         try:
-            client = TavilyClient(api_key=self.api_key)
-            results_limit = max_results or self.max_results
-            payload: Dict[str, Any] = {
-                "query": query_text,
-                "topic": topic,
-                "search_depth": "basic",
-                "max_results": results_limit,
-            }
-            response = client.search(**payload)
-        except TypeError:
-            client = TavilyClient(api_key=self.api_key)
-            response = client.search(
+            response = self.client.search(
                 query=query_text,
                 topic=topic,
                 search_depth="basic",
-                num_results=max_results or self.max_results,
+                max_results=results_limit,
+            )
+        except TypeError:
+            # Fallback for older tavily-python SDK parameter names
+            response = self.client.search(
+                query=query_text,
+                topic=topic,
+                search_depth="basic",
+                num_results=results_limit,
             )
         except Exception as exc:
             raise RuntimeError(f"Tavily search failed: {exc}") from exc
@@ -275,6 +276,9 @@ class MasterAgent:
                 "search_results": [],
                 "error": str(exc),
             }
+
+        if not results:
+            return self._generic_answer(prompt, history)
 
         search_context = "\n".join(
             f"{index}. {item.get('title', 'Untitled')}\nURL: {item.get('url', '')}\nSummary: {item.get('snippet', '')}"
@@ -392,3 +396,4 @@ class MasterAgent:
             return self.handle_study(prompt, history)
 
         return self._generic_answer(prompt, history)
+        
