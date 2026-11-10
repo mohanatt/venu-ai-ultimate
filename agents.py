@@ -15,7 +15,7 @@ SUPPORTED_GROQ_MODELS = {
     "gemma2-9b-it",
 }
 
-DEFAULT_GROQ_MODEL_ID = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_MODEL_ID = "mixtral-8x7b-32768"
 
 
 def get_secret(name: str, default: str = "") -> str:
@@ -34,16 +34,10 @@ def get_secret(name: str, default: str = "") -> str:
 
 def resolve_model_id(model: Optional[str] = None) -> str:
     candidate = (
-        model or get_secret("GROQ_MODEL_ID", DEFAULT_GROQ_MODEL_ID)
+        model or get_secret("GROQ_MODEL_ID", "mixtral-8x7b-32768")
     ).strip()
+    return candidate if candidate else "mixtral-8x7b-32768"
 
-    if not candidate:
-        return DEFAULT_GROQ_MODEL_ID
-
-    if candidate in SUPPORTED_GROQ_MODELS:
-        return candidate
-
-    return DEFAULT_GROQ_MODEL_ID
 
 
 class GroqAgent:
