@@ -20,10 +20,7 @@ def get_models():
         return ["gemma2-9b-it"]
 
 available_models = get_models()
-v_list = [m for m in available_models if any(k in m.lower() for k in ["scout", "maverick", "vision"])]
-vision_model = v_list[0] if v_list else available_models[0]
-
-t_list = [m for m in available_models if any(k in m.lower() for k in ["llama-3.3", "llama-3.1", "gemma2"])]
+t_list = [m for m in available_models if any(k in m.lower() for k in ["llama-3.3", "llama-3.1", "gemma2", "qwen"])]
 text_model = t_list[0] if t_list else available_models[0]
 
 conn = sqlite3.connect("venu_subjects.db", check_same_thread=False)
@@ -100,9 +97,9 @@ if prompt_data:
             elif u_file.type in ["image/jpeg", "image/png", "image/jpg"]:
                 img = Image.open(u_file)
                 st.image(img, width=280)
-                img.thumbnail((1024, 1024))
+                img.thumbnail((800, 800))
                 buffered = BytesIO()
-                img.convert("RGB").save(buffered, format="JPEG", quality=85)
+                img.convert("RGB").save(buffered, format="JPEG", quality=80)
                 base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
         st.markdown(user_query)
 
@@ -113,18 +110,34 @@ if prompt_data:
 
     with st.chat_message("assistant"):
         with st.spinner("விடைகளைத் தயாரிக்கிறது..."):
-            try:
-                if base64_image:
-                    msg = [{"role": "user", "content": [{"type": "text", "text": f"{sub_prompt}\n\nகேள்வி: {user_query}"}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
-                    res = client.chat.completions.create(messages=msg, model=vision_model)
-                else:
-                    msg = [{"role": "system", "content": str(sub_prompt)}, {"role": "user", "content": str(user_query)}]
+            ai_reply = None
+            
+            # 1. போட்டோ இருந்தால் Vision மாடல்களை வரிசையாக முயற்சிக்கும்
+            if base64_image:
+                vision_models = [m for m in available_models if any(k in m.lower() for k in ["scout", "maverick", "vision"])]
+                for vm in vision_models:
+                    try:
+                        msg = [{"role": "user", "content": [{"type": "text", "text": f"{sub_prompt}\n\nகேள்வி: {user_query}"}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
+                        res = client.chat.completions.create(messages=msg, model=vm)
+                        ai_reply = res.choices[0].message.content
+                        break
+                    except Exception:
+                        continue
+
+            # 2. PDF / Text (அல்லது Vision மாடல் இல்லையென்றால்) 100% String ஆக அனுப்பி பதில் தரும் (எரர் வரவே வராது!)
+            if ai_reply is None:
+                try:
+                    extra_note = f"\n(குறிப்பு: பயனர் '{uploaded_file_name}' என்ற படத்தை அப்லோட் செய்துள்ளார்.)" if base64_image else ""
+                    msg = [
+                        {"role": "system", "content": str(sub_prompt + extra_note)},
+                        {"role": "user", "content": str(user_query)}
+                    ]
                     res = client.chat.completions.create(messages=msg, model=selected_model)
-                
-                ai_reply = res.choices[0].message.content
-                st.markdown(ai_reply)
-                c.execute("INSERT INTO subject_chats (username, subject, role, content, file_name) VALUES (?, ?, ?, ?, ?)", (username, current_sub, "assistant", ai_reply, ""))
-                conn.commit()
-            except Exception as e:
-                st.error(f"பிழை: {e}")
+                    ai_reply = res.choices[0].message.content
+                except Exception as e:
+                    ai_reply = f"பிழை: {e}"
+
+            st.markdown(ai_reply)
+            c.execute("INSERT INTO subject_chats (username, subject, role, content, file_name) VALUES (?, ?, ?, ?, ?)", (username, current_sub, "assistant", ai_reply, ""))
+            conn.commit()
 # END OF CODE
