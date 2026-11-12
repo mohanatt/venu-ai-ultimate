@@ -1,303 +1,132 @@
-from __future__ import annotations
-
-import json
-import os
-import re
-from typing import Any, Dict, List
-
 import streamlit as st
-from streamlit.components.v1 import html as component_html
+import sqlite3
+from pypdf import PdfReader
+from PIL import Image
+from google import genai
+from google.genai import types
 
-from agents import MasterAgent, get_secret
+st.set_page_config(page_title="My Advanced AI", page_icon="🚀", layout="wide")
 
+# API Key செட்டப்
+client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-st.set_page_config(
-    page_title="VENU AI ULTIMATE",
-    page_icon="🤖",
-    layout="wide",
-)
+# Database (ஒவ்வொரு பயனருக்கும் தனி History சேமிக்க)
+conn = sqlite3.connect("advanced_chat.db", check_same_thread=False)
+c = conn.cursor()
+c.execute("""
+    CREATE TABLE IF NOT EXISTS chat_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        role TEXT,
+        content TEXT
+    )
+""")
+conn.commit()
 
-
-def get_groq_api_key() -> str:
-    return get_secret("GROQ_API_KEY")
-
-
-def get_groq_model_id() -> str:
-    return get_secret("GROQ_MODEL_ID")
-
-
-def get_tavily_api_key() -> str:
-    return get_secret("TAVILY_API_KEY")
-
-
-def clean_markdown_for_speech(text: str) -> str:
-    """Strip markdown formatting and code blocks so browser speech sounds natural."""
-    clean = re.sub(r"```[\s\S]*?```", " Code snippet provided. ", text)
-    clean = re.sub(r"`.*?`", "", clean)
-    clean = re.sub(r"[#*_~>\[\]\(\)]", " ", clean)
-    return " ".join(clean.split())
-
-
-def initialize_app_state() -> None:
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {
-                "role": "assistant",
-                "content": (
-                    "வணக்கம்! 👋 நான் VENU AI.\n\n"
-                    "உனக்கு படிப்பு, Coding, Internet Search, "
-                    "மற்றும் குரல் உதவி போன்ற விஷயங்களில் உதவ முடியும்.\n\n"
-                    "என்ன கேட்க விரும்புகிறாய்?"
-                ),
-            }
-        ]
-
-    if "voice_enabled" not in st.session_state:
-        st.session_state.voice_enabled = True
-
-    if "pending_speech" not in st.session_state:
-        st.session_state.pending_speech = ""
-
-
-def initialize_agent() -> None:
-    """Create or refresh MasterAgent if settings change or if missing."""
-    groq_key = get_groq_api_key()
-    if not groq_key:
-        st.error("⚠️ GROQ_API_KEY is missing. Add it in Streamlit Secrets.")
-        st.code(
-            'GROQ_API_KEY = "gsk_..."\n'
-            'GROQ_MODEL_ID = "llama-3.1-8b-instant"\n'
-            'TAVILY_API_KEY = "tvly-..."',
-            language="toml",
-        )
-        st.stop()
-
-    configured_model = get_groq_model_id()
+# --- Sidebar: User Profile, Mode & File Upload ---
+with st.sidebar:
+    st.title("⚙️ AI Control Panel")
     
-    # Cache invalidation check: Recreate agent if model preference or key changed
-    needs_refresh = (
-        "master_agent" not in st.session_state
-        or st.session_state.get("_cached_groq_key") != groq_key
-        or (configured_model and st.session_state.get("_cached_model") != configured_model)
+    # 1. நண்பர்களுக்கான தனித்தனி பெயர் (Private History-க்காக)
+    username = st.text_input("உங்கள் பெயர் (History சேமிக்க):", value="Venugopal").strip().lower()
+    
+    # 2. AI Mode தேர்வு
+    ai_mode = st.selectbox(
+        "AI Mode தேர்ந்தெடுக்கவும்:",
+        ["General Assistant", "Study & Exam Tutor", "Coding & Tech Expert"]
     )
-
-    if needs_refresh:
-        try:
-            st.session_state.master_agent = MasterAgent(
-                api_key=groq_key,
-                model=configured_model or None,
-                search_api_key=get_tavily_api_key(),
-            )
-            st.session_state._cached_groq_key = groq_key
-            st.session_state._cached_model = configured_model
-        except Exception as exc:
-            st.error(f"AI Initialization Failed: {exc}")
-            st.stop()
-
-
-def build_sidebar() -> str:
-    st.sidebar.title("🤖 VENU AI ULTIMATE")
-    st.sidebar.caption("Personal AI Assistant | Tamil Nadu")
-
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### ✨ Features")
-    st.sidebar.markdown(
-        """
-        - 🎙️ Voice Input (Web Speech API)
-        - 🔊 Text to Speech (Tamil & English)
-        - 🌐 Internet Search (Tavily)
-        - 💻 Coding Specialist
-        - 📚 Study Assistant
-        """
+    
+    st.divider()
+    
+    # 3. File Upload (PDF, TXT, மற்றும் Images)
+    st.subheader("📁 File / Photo Upload")
+    uploaded_file = st.file_uploader(
+        "PDF, TXT அல்லது போட்டோ (JPG/PNG) அப்லோட் செய்யவும்:",
+        type=["pdf", "txt", "jpg", "jpeg", "png"]
     )
-
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### Choose AI Agent")
-    selected_agent = st.sidebar.selectbox(
-        "Select an agent",
-        [
-            "Master Agent",
-            "Internet Search Agent",
-            "Coding Agent",
-            "Study Agent",
-        ],
-        key="selected_agent",
-    )
-
-    st.sidebar.markdown("---")
-    st.sidebar.checkbox(
-        "🔊 Voice Assistant (Speech Output)",
-        value=st.session_state.get("voice_enabled", True),
-        key="voice_enabled",
-    )
-
-    active_model = getattr(st.session_state.get("master_agent"), "current_model", "Auto-Detecting...")
-    st.sidebar.caption(f"Active Model: `{active_model}`")
-
-    if get_tavily_api_key():
-        st.sidebar.caption("🟢 Tavily Search: Active")
-    else:
-        st.sidebar.caption("⚪ Tavily Search: Not Configured")
-
-    if st.sidebar.button("🛑 Stop Speaking"):
-        st.session_state.pending_speech = ""
+    
+    if st.button("🗑️ என் History-ஐ அழி"):
+        c.execute("DELETE FROM chat_logs WHERE username = ?", (username,))
+        conn.commit()
         st.rerun()
 
-    if st.sidebar.button("🗑️ Clear Chat"):
-        st.session_state.messages = [
-            {
-                "role": "assistant",
-                "content": "வணக்கம்! நான் VENU AI. என்ன உதவி வேண்டும்?",
-            }
-        ]
-        st.session_state.pending_speech = ""
-        st.rerun()
+# System Instruction அமைத்தல்
+mode_prompts = {
+    "General Assistant": "நீங்கள் ஒரு புத்திசாலித்தனமான, நட்பான AI உதவியாளர். தெளிவாகவும் சுருக்கமாகவும் பதில் அளியுங்கள்.",
+    "Study & Exam Tutor": "நீங்கள் ஒரு சிறந்த ஆசிரியர். மாணவர்களுக்குப் புரியும்படி எளிய உதாரணங்கள் மற்றும் முக்கியப் புள்ளிகளுடன் (Bullet points) பாடம் நடத்துங்கள்.",
+    "Coding & Tech Expert": "நீங்கள் ஒரு சீனியர் சாஃப்ட்வேர் ஆர்க்கிடெக்ட். சுத்தமான கோட் மற்றும் பிழைகளைச் சரிசெய்யும் வழிகளைத் தெளிவாகக் கூறுங்கள்."
+}
 
-    return selected_agent
+# அப்லோட் செய்த ஃபைலைத் தயார் செய்தல்
+file_text = ""
+uploaded_image = None
 
+if uploaded_file is not None:
+    file_type = uploaded_file.type
+    if file_type == "application/pdf":
+        reader = PdfReader(uploaded_file)
+        for page in reader.pages:
+            file_text += page.extract_text() or ""
+        st.sidebar.success(f"PDF படிக்கப்பட்டது ({len(reader.pages)} பக்கங்கள்)")
+    elif file_type == "text/plain":
+        file_text = uploaded_file.read().decode("utf-8")
+        st.sidebar.success("Text ஃபைல் தயாராக உள்ளது!")
+    elif file_type in ["image/jpeg", "image/png", "image/jpg"]:
+        uploaded_image = Image.open(uploaded_file)
+        st.sidebar.image(uploaded_image, caption="அப்லோட் செய்த படம்", use_container_width=True)
 
-def render_search_results(results: List[Dict[str, Any]]) -> None:
-    if not results:
-        return
+# --- Main Chat Screen ---
+st.title(f"🚀 Smart AI ({ai_mode})")
+st.caption(f"Logged in as: **{username.capitalize()}** | உங்கள் உரையாடல்கள் பாதுகாப்பாகச் சேமிக்கப்படும்.")
 
-    with st.expander("🌐 Internet Search Results", expanded=False):
-        for index, result in enumerate(results, start=1):
-            title = result.get("title", "Untitled")
-            url = result.get("url", "")
-            snippet = result.get("snippet", "No summary available.")
-            date_value = result.get("date", "Date not available")
+# குறிப்பிட்ட நபரின் பழைய History-ஐ மட்டும் எடுத்தல்
+c.execute("SELECT role, content FROM chat_logs WHERE username = ?", (username,))
+user_history = c.fetchall()
 
-            st.markdown(f"**{index}. {title}**")
-            if url:
-                st.markdown(f"[🔗 Open Link]({url})")
-            if snippet:
-                st.caption(snippet)
-            st.caption(f"📅 {date_value}")
-            st.markdown("---")
+for role, content in user_history:
+    with st.chat_message(role):
+        st.markdown(content)
 
+# புதிய கேள்வி
+user_query = st.chat_input("கேள்வியைக் கேளுங்கள் அல்லது ஃபைல் பற்றி விசாரியுங்கள்...")
 
-def render_chat_history() -> None:
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-
-def process_prompt(prompt_text: str, selected_agent: str) -> None:
-    prompt = str(prompt_text).strip()
-    if not prompt:
-        return
-
-    st.session_state.messages.append({"role": "user", "content": prompt})
-
+if user_query:
+    # பயனர் கேள்வியைக் காட்டி சேமித்தல்
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(user_query)
+    c.execute("INSERT INTO chat_logs (username, role, content) VALUES (?, ?, ?)", (username, "user", user_query))
+    conn.commit()
 
-    history = st.session_state.messages[:-1]
-    agent: MasterAgent = st.session_state.master_agent
+    # கடைசி 6 மெசேஜ்களை Memory-க்காக எடுத்தல்
+    recent_chat = "\n".join([f"{r}: {m}" for r, m in user_history[-6:]])
+
+    full_prompt = f"""
+    {mode_prompts[ai_mode]}
+
+    முந்தைய உரையாடல் சுருக்கம் (Memory):
+    {recent_chat}
+
+    அப்லோட் செய்யப்பட்ட ஆவணத்தின் விவரம்:
+    {file_text[:20000] if file_text else "ஆவணம் எதுவும் அப்லோட் செய்யப்படவில்லை."}
+
+    பயனரின் தற்போதைய கேள்வி: {user_query}
+    """
+
+    # AI-க்கு அனுப்ப வேண்டிய உள்ளடக்கம் (Text + Image இருந்தால் Image)
+    contents_to_send = [full_prompt]
+    if uploaded_image is not None:
+        contents_to_send.append(uploaded_image)
 
     with st.chat_message("assistant"):
-        with st.spinner("VENU AI பதில் உருவாக்குகிறது..."):
-            try:
-                if selected_agent == "Internet Search Agent":
-                    response = agent.handle_internet_search(prompt, history=history)
-                elif selected_agent == "Coding Agent":
-                    response = agent.handle_coding(prompt, history=history)
-                elif selected_agent == "Study Agent":
-                    response = agent.handle_study(prompt, history=history)
-                else:
-                    response = agent.handle(prompt, history=history)
+        with st.spinner("சிந்திக்கிறது..."):
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents_to_send
+            )
+            ai_reply = response.text
+            st.markdown(ai_reply)
 
-                answer = response.get("answer", "பதில் உருவாக்க முடியவில்லை.")
-                st.markdown(answer)
-
-                if response.get("used_internet_search"):
-                    render_search_results(response.get("search_results", []))
-
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": answer}
-                )
-
-                if st.session_state.get("voice_enabled", True):
-                    st.session_state.pending_speech = clean_markdown_for_speech(answer)
-
-            except Exception as exc:
-                error_message = f"பதில் உருவாக்கும்போது பிழை ஏற்பட்டது: {exc}"
-                st.error(error_message)
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": error_message}
-                )
-                st.session_state.pending_speech = ""
-
-
-def render_voice_assistant() -> None:
-    if not st.session_state.get("voice_enabled", True):
-        return
-
-    speech_text = st.session_state.get("pending_speech", "")
-    speech_text_json = json.dumps(speech_text)
-
-    html = f"""
-    <div style="margin: 10px 0; padding: 12px; border-radius: 12px; background: #1e293b; color: white; display: flex; align-items: center; justify-content: space-between;">
-      <span id="voice-status" style="font-size: 14px; font-weight: 500;">🔊 Voice Assistant Active</span>
-      <div>
-        <button id="stop-btn" style="border: none; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: bold; background: #ef4444; color: white; cursor: pointer;">🛑 Stop Voice</button>
-      </div>
-    </div>
-    <script>
-      const statusEl = document.getElementById('voice-status');
-      const stopBtn = document.getElementById('stop-btn');
-      const speechText = {speech_text_json};
-
-      function stopSpeech() {{
-        if ('speechSynthesis' in window) {{
-          window.speechSynthesis.cancel();
-        }}
-      }}
-
-      if (speechText && speechText.trim().length > 0) {{
-        stopSpeech();
-        const utterance = new SpeechSynthesisUtterance(speechText);
-        utterance.lang = /[\u0B80-\u0BFF]/.test(speechText) ? 'ta-IN' : 'en-IN';
-        utterance.rate = 1.0;
-        utterance.onstart = () => {{
-          statusEl.textContent = 'Speaking...';
-        }};
-        utterance.onend = () => {{
-          statusEl.textContent = 'Voice Assistant Ready';
-        }};
-        utterance.onerror = () => {{
-          statusEl.textContent = 'Voice playback error';
-        }};
-        window.speechSynthesis.speak(utterance);
-      }}
-
-      stopBtn.addEventListener('click', () => {{
-        stopSpeech();
-        statusEl.textContent = 'Voice Stopped';
-      }});
-    </script>
-    """
-    component_html(html, height=75)
-
-
-def main() -> None:
-    initialize_app_state()
-    initialize_agent()
-    selected_agent = build_sidebar()
-
-    st.title("🤖 VENU AI ULTIMATE")
-    st.caption("Your Personal Multi-Agent AI Assistant | தமிழ் + English")
-    st.markdown("---")
-
-    render_voice_assistant()
-    render_chat_history()
-
-    prompt = st.chat_input("உங்கள் கேள்வியை உள்ளிடவும்... / Ask your question...")
-    if prompt:
-        process_prompt(prompt, selected_agent)
-        st.rerun()
-
-
-if __name__ == "__main__":
-    main()
-    
+    # AI பதிலை DB-ல் சேமித்தல்
+    c.execute("INSERT INTO chat_logs (username, role, content) VALUES (?, ?, ?)", (username, "assistant", ai_reply))
+    conn.commit()
+        
