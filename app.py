@@ -1,6 +1,6 @@
 import streamlit as st
 import sqlite3
-import requests
+import base64
 from io import BytesIO
 from pypdf import PdfReader
 from PIL import Image
@@ -9,22 +9,6 @@ from groq import Groq
 st.set_page_config(page_title="Venu AI", page_icon="🎓", layout="wide")
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-
-# வேகமான Cloud OCR (போட்டோவை சுருக்கி அனுப்புவதால் உடனும் முடிந்துவிடும்)
-def extract_image_text(img_bytes):
-    try:
-        res = requests.post(
-            "https://api.ocr.space/parse/image",
-            files={"image.jpg": img_bytes},
-            data={"apikey": "helloworld", "language": "eng"},
-            timeout=10
-        )
-        data = res.json()
-        if data.get("ParsedResults"):
-            return data["ParsedResults"][0].get("ParsedText", "")
-    except Exception:
-        pass
-    return ""
 
 @st.cache_data(ttl=3600)
 def get_models():
@@ -36,8 +20,13 @@ def get_models():
         return ["gemma2-9b-it"]
 
 available_models = get_models()
-t_list = [m for m in available_models if any(k in m.lower() for k in ["llama-3.3", "llama-3.1", "gemma2", "qwen"])]
-text_model = t_list[0] if t_list else available_models[0]
+
+# Vision மாடலைத் தேர்ந்தெடுத்தல் (போட்டோவை உடனே படிக்க)
+vision_candidates = [m for m in available_models if any(k in m.lower() for k in ["scout", "maverick", "vision", "llama-4"])]
+vision_model = vision_candidates[0] if vision_candidates else available_models[0]
+
+text_candidates = [m for m in available_models if any(k in m.lower() for k in ["llama-3.3", "llama-3.1", "gemma2"])]
+text_model = text_candidates[0] if text_candidates else available_models[0]
 
 conn = sqlite3.connect("venu_subjects.db", check_same_thread=False)
 c = conn.cursor()
@@ -97,12 +86,14 @@ if prompt_data:
     uploaded_files = prompt_data.files
     file_text = ""
     uploaded_file_name = ""
+    base64_image = None
 
     with st.chat_message("user"):
         if uploaded_files:
             u_file = uploaded_files[0]
             uploaded_file_name = u_file.name
             st.info(f"📄 அப்லோட் ஆனது: {uploaded_file_name}")
+            
             if u_file.type == "application/pdf":
                 reader = PdfReader(u_file)
                 for page in reader.pages:
@@ -112,37 +103,48 @@ if prompt_data:
             elif u_file.type in ["image/jpeg", "image/png", "image/jpg"]:
                 img = Image.open(u_file)
                 st.image(img, width=250)
-                # போட்டோவின் அளவை சுருக்கி வேகமாக அனுப்பும் பகுதி
-                img.thumbnail((800, 800))
-                buf = BytesIO()
-                img.convert("RGB").save(buf, format="JPEG", quality=70)
-                with st.spinner("வேகமாகப் படிக்கிறது..."):
-                    file_text = extract_image_text(buf.getvalue())
+                # வேகத்திற்காக போட்டோவை சிறிய சைசாக மாற்றுதல்
+                img.thumbnail((700, 700))
+                buffered = BytesIO()
+                img.convert("RGB").save(buffered, format="JPEG", quality=65)
+                base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        
         st.markdown(user_query)
 
     c.execute("INSERT INTO subject_chats (username, subject, role, content, file_name) VALUES (?, ?, ?, ?, ?)", (username, current_sub, "user", user_query, uploaded_file_name))
     conn.commit()
 
-    sub_prompt = f"""நீங்கள் 12-ம் வகுப்பு {current_sub} ஆசிரியர்.
-    கீழே பயனர் அப்லோட் செய்த கொஸ்டின் பேப்பர்/படத்தில் இருந்து எடுக்கப்பட்ட வரிகள் கொடுக்கப்பட்டுள்ளன.
-    அதைப் படித்து பயனரின் கேள்விக்குத் தெளிவாகத் தமிழிலும் ஆங்கிலத்திலும் விளக்கமாகப் பதில் அளிக்கவும்.
-    
-    Extracted Document Text:
-    {file_text[:18000] if file_text else 'ஆவணத்தில் எழுத்துக்கள் இல்லை.'}"""
+    sub_prompt = f"நீங்கள் 12-ம் வகுப்பு {current_sub} ஆசிரியர். கொடுக்கப்பட்டுள்ள கொஸ்டின் பேப்பரைப் படித்து கேள்விகளுக்குத் தெளிவான விடைகளைத் தாருங்கள்."
 
     with st.chat_message("assistant"):
-        with st.spinner("விடைகளைத் தயாரிக்கிறது..."):
+        with st.spinner("வேகமாக பதிலைத் தயாரிக்கிறது..."):
             try:
-                msg = [
-                    {"role": "system", "content": str(sub_prompt)},
-                    {"role": "user", "content": str(user_query)}
-                ]
-                res = client.chat.completions.create(messages=msg, model=selected_model)
-                ai_reply = res.choices[0].message.content
-            except Exception as e:
-                ai_reply = f"பிழை: {e}"
+                if base64_image:
+                    # Groq Vision மாடல் மூலம் ஒரே நொடியில் போட்டோவைப் படித்து பதில் தரும்
+                    chat_completion = client.chat.completions.create(
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": f"{sub_prompt}\n\nகேள்வி: {user_query}"},
+                                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
+                                ],
+                            }
+                        ],
+                        model=vision_model,
+                    )
+                else:
+                    msg = [
+                        {"role": "system", "content": str(sub_prompt + f"\nDocument: {file_text[:15000]}")},
+                        {"role": "user", "content": str(user_query)}
+                    ]
+                    chat_completion = client.chat.completions.create(messages=msg, model=selected_model)
+                
+                ai_reply = chat_completion.choices[0].message.content
+                st.markdown(ai_reply)
 
-            st.markdown(ai_reply)
-            c.execute("INSERT INTO subject_chats (username, subject, role, content, file_name) VALUES (?, ?, ?, ?, ?)", (username, current_sub, "assistant", ai_reply, ""))
-            conn.commit()
+                c.execute("INSERT INTO subject_chats (username, subject, role, content, file_name) VALUES (?, ?, ?, ?, ?)", (username, current_sub, "assistant", ai_reply, ""))
+                conn.commit()
+            except Exception as e:
+                st.error(f"பிழை: {e}")
 # END OF CODE
