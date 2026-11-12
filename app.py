@@ -11,20 +11,27 @@ st.set_page_config(page_title="Venu AI Ultimate", page_icon="🚀", layout="wide
 # API Key
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-# உங்கள் Groq கணக்கில் வேலை செய்யும் மாடல்களைத் தானாகக் கண்டுபிடித்தல்
+# உங்கள் Groq கணக்கில் வேலை செய்யும் மாடல்களை எடுத்தல்
 @st.cache_data(ttl=3600)
-def get_working_models():
+def get_all_models():
     try:
         models = client.models.list()
-        chat_models = [
+        all_ids = [
             m.id for m in models.data 
             if not any(x in m.id.lower() for x in ["whisper", "guard", "tts", "playai"])
         ]
-        return chat_models if chat_models else ["gemma2-9b-it"]
+        return all_ids if all_ids else ["llama-3.3-70b-versatile"]
     except Exception:
-        return ["gemma2-9b-it"]
+        return ["llama-3.3-70b-versatile"]
 
-available_models = get_working_models()
+available_models = get_all_models()
+
+# போட்டோவைப் பார்க்கக்கூடிய Vision மாடலைத் தனியாகக் கண்டுபிடித்தல்
+vision_candidates = [
+    m for m in available_models 
+    if any(k in m.lower() for k in ["scout", "maverick", "vision"])
+]
+default_vision_model = vision_candidates[0] if vision_candidates else "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # Database (History சேமிக்க)
 conn = sqlite3.connect("advanced_chat.db", check_same_thread=False)
@@ -39,15 +46,17 @@ c.execute("""
 """)
 conn.commit()
 
-# --- Sidebar (செட்டிங்ஸ் மட்டும்) ---
+# --- Sidebar ---
 with st.sidebar:
     st.title("⚙️ Venu AI Settings")
     username = st.text_input("உங்கள் பெயர்:", value="Venugopal").strip().lower()
-    selected_model = st.selectbox("AI Model:", available_models)
+    selected_model = st.selectbox("Text AI Model:", available_models)
     ai_mode = st.selectbox(
         "AI Mode:",
         ["General Assistant", "Study & Exam Tutor", "Coding & Tech Expert"]
     )
+    st.caption(f"📷 Vision Model: `{default_vision_model}`")
+    
     if st.button("🗑️ என் History-ஐ அழி"):
         c.execute("DELETE FROM chat_logs WHERE username = ?", (username,))
         conn.commit()
@@ -60,10 +69,9 @@ mode_prompts = {
 }
 
 # --- Main Screen ---
-st.title(f"🚀 Venu AI Ultimate")
-st.caption(f"User: **{username.capitalize()}** | Mode: **{ai_mode}** | Model: `{selected_model}`")
+st.title("🚀 Venu AI Ultimate")
+st.caption(f"User: **{username.capitalize()}** | Mode: **{ai_mode}**")
 
-# பழைய History-ஐ காட்டுதல்
 c.execute("SELECT role, content FROM chat_logs WHERE username = ?", (username,))
 user_history = c.fetchall()
 
@@ -71,7 +79,7 @@ for role, content in user_history:
     with st.chat_message(role):
         st.markdown(content)
 
-# --- கீழே Chat Box-லேயே File Upload வசதி! ---
+# --- கீழே Chat Box-லேயே File Upload வசதி ---
 prompt_data = st.chat_input(
     "கேள்வியைக் கேளுங்கள் (அல்லது + அழுத்தி ஃபைல் சேர்க்கவும்)...",
     accept_file=True,
@@ -92,15 +100,17 @@ if prompt_data:
                 reader = PdfReader(uploaded_file)
                 for page in reader.pages:
                     file_text += page.extract_text() or ""
-                st.info(f"📄 அப்லோட் ஆனது: {uploaded_file.name}")
+                st.info(f"📄 PDF படிக்கப்பட்டது: {uploaded_file.name}")
             elif uploaded_file.type == "text/plain":
                 file_text = uploaded_file.read().decode("utf-8")
-                st.info(f"📝 அப்லோட் ஆனது: {uploaded_file.name}")
+                st.info(f"📝 Text படிக்கப்பட்டது: {uploaded_file.name}")
             elif uploaded_file.type in ["image/jpeg", "image/png", "image/jpg"]:
                 img = Image.open(uploaded_file)
                 st.image(img, width=250)
+                # போட்டோ அளவைக் குறைத்து Base64 ஆக மாற்றுதல்
+                img.thumbnail((1024, 1024))
                 buffered = BytesIO()
-                img.convert("RGB").save(buffered, format="JPEG")
+                img.convert("RGB").save(buffered, format="JPEG", quality=85)
                 base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
         
         st.markdown(user_query)
@@ -119,26 +129,25 @@ if prompt_data:
         with st.spinner("சிந்திக்கிறது..."):
             try:
                 if base64_image:
-                    vision_models = [m for m in available_models if any(v in m.lower() for v in ["vision", "scout", "maverick"])]
-                    v_model = vision_models[0] if vision_models else selected_model
-                    
+                    # போட்டோ இருந்தால் Vision மாடலுக்கு அனுப்புதல்
                     chat_completion = client.chat.completions.create(
                         messages=[
                             {
                                 "role": "user",
                                 "content": [
-                                    {"type": "text", "text": f"{system_content}\n\nகேள்வி: {user_query}"},
+                                    {"type": "text", "text": f"{mode_prompts[ai_mode]}\n\nகேள்வி: {user_query}"},
                                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
                                 ],
                             }
                         ],
-                        model=v_model,
+                        model=default_vision_model,
                     )
                 else:
+                    # சாதாரண மெசேஜ் அல்லது PDF என்றால் String ஆக அனுப்புதல்
                     chat_completion = client.chat.completions.create(
                         messages=[
-                            {"role": "system", "content": system_content},
-                            {"role": "user", "content": user_query}
+                            {"role": "system", "content": str(system_content)},
+                            {"role": "user", "content": str(user_query)}
                         ],
                         model=selected_model,
                     )
@@ -150,4 +159,3 @@ if prompt_data:
                 conn.commit()
             except Exception as e:
                 st.error(f"பிழை: {e}")
-            
