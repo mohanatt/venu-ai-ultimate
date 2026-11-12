@@ -71,7 +71,7 @@ with st.sidebar:
 if "active_subject" not in st.session_state:
     st.session_state.active_subject = "Physics"
 
-# Subject Navigation Buttons[span_2](start_span)[span_2](end_span)
+# Subject Navigation Buttons[span_0](start_span)[span_0](end_span)
 col1, col2, col3 = st.columns(3)
 with col1:
     if st.button("⚛️ Physics", use_container_width=True, type="primary" if st.session_state.active_subject == "Physics" else "secondary"):
@@ -107,7 +107,7 @@ if chat_records:
 
 st.divider()
 
-# --- Stable File Uploader Box ---
+# --- Stable & Fast File Uploader Box ---
 uploaded_file = st.file_uploader(
     f"📂 {current_sub} கொஸ்டின் பேப்பர் அல்லது நோட்ஸ் (PDF / Image) இங்கே அப்லோட் செய்யவும்:",
     type=["pdf", "txt", "jpg", "jpeg", "png"]
@@ -131,7 +131,6 @@ if btn_step:
 elif btn_formula:
     default_query_prefix = "இந்தத் தலைப்பு அல்லது கேள்விகளுக்குத் தேவையான அனைத்து முக்கிய சூத்திரங்களையும் (Formulas) பட்டியலிடவும்."
 
-# Chat Input
 user_query = st.chat_input("உங்கள் சந்தேகத்தைக் கேளுங்கள்...")
 final_query = user_query or default_query_prefix
 
@@ -154,13 +153,15 @@ if final_query or uploaded_file:
                 file_text = uploaded_file.read().decode("utf-8")
                 st.info(f"📝 Text Loaded: {uploaded_file_name}")
             elif uploaded_file.type in ["image/jpeg", "image/png", "image/jpg"]:
-                img = Image.open(uploaded_file)
-                img.thumbnail((700, 700))
-                buffered = BytesIO()
-                img.convert("RGB").save(buffered, format="JPEG", quality=60)
-                base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
-                st.image(img, width=280)
-                st.success("✅ படம் வெற்றிகரமாக இணைக்கப்பட்டது!")
+                with st.spinner("பெரிய போட்டோ சுருக்கப்படுகிறது..."):
+                    img = Image.open(uploaded_file)
+                    # 6.5MB போட்டோவை உடனே சுருக்கி வேகமாக அனுப்பும் பகுதி
+                    img.thumbnail((500, 500))
+                    buffered = BytesIO()
+                    img.convert("RGB").save(buffered, format="JPEG", quality=45)
+                    base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                st.image(img, width=250)
+                st.success("✅ படம் வெற்றிகரமாகச் சுருக்கி அப்லோட் செய்யப்பட்டது!")
         
         st.markdown(query_text)
 
@@ -171,7 +172,7 @@ if final_query or uploaded_file:
     மாணவர்களுக்குப் புரியும் வகையில் எளிய முறையில், அறிவியல் மற்றும் கணித விதிமுறைகளுடன் துல்லியமான விடைகளைத் தரவும்."""
 
     with st.chat_message("assistant"):
-        with st.spinner("AI சிந்தikus துல்லியமான பதிலைத் தயாரிக்கிறது..."):
+        with st.spinner("AI துல்லியமான பதிலைத் தயாரிக்கிறது..."):
             try:
                 if base64_image:
                     chat_completion = client.chat.completions.create(
@@ -200,4 +201,4 @@ if final_query or uploaded_file:
                 conn.commit()
             except Exception as e:
                 st.error(f"பிழை ஏற்பட்டுள்ளது: {e}")
-    
+            
