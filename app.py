@@ -8,7 +8,7 @@ from groq import Groq
 
 st.set_page_config(page_title="Venu AI Ultimate", page_icon="🚀", layout="wide")
 
-# உங்கள் Secrets-ல் உள்ள GROQ_API_KEY-ஐப் பயன்படுத்துதல்
+# API Key செட்டப்
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # Database (தனித்தனி User History)
@@ -106,33 +106,36 @@ if user_query:
 
     with st.chat_message("assistant"):
         with st.spinner("சிந்திக்கிறது..."):
-            if base64_image:
-                # போட்டோ அப்லோட் செய்தால் Groq Vision மாடல் பயன்படுத்தும்
-                chat_completion = client.chat.completions.create(
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": f"{system_content}\n\nகேள்வி: {user_query}"},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
-                            ],
-                        }
-                    ],
-                    model="llama-3.2-90b-vision-preview",
-                )
-            else:
-                # சாதாரண கேள்வி மற்றும் PDF-க்கு Llama-3.3-70b மாடல் பயன்படுத்தும்
-                chat_completion = client.chat.completions.create(
-                    messages=[
-                        {"role": "system", "content": system_content},
-                        {"role": "user", "content": user_query}
-                    ],
-                    model="llama-3.3-70b-versatile",
-                )
-            
-            ai_reply = chat_completion.choices[0].message.content
-            st.markdown(ai_reply)
+            try:
+                if base64_image:
+                    # போட்டோ அப்லோட் செய்தால் புதிய Llama-4 Vision மாடல்
+                    chat_completion = client.chat.completions.create(
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": f"{system_content}\n\nகேள்வி: {user_query}"},
+                                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
+                                ],
+                            }
+                        ],
+                        model="meta-llama/llama-4-scout-17b-16e-instruct",
+                    )
+                else:
+                    # சாதாரண கேள்வி மற்றும் PDF-க்கு அதிவேக Llama-3.1 மாடல்
+                    chat_completion = client.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": system_content},
+                            {"role": "user", "content": user_query}
+                        ],
+                        model="llama-3.1-8b-instant",
+                    )
+                
+                ai_reply = chat_completion.choices[0].message.content
+                st.markdown(ai_reply)
 
-    c.execute("INSERT INTO chat_logs (username, role, content) VALUES (?, ?, ?)", (username, "assistant", ai_reply))
-    conn.commit()
-    
+                c.execute("INSERT INTO chat_logs (username, role, content) VALUES (?, ?, ?)", (username, "assistant", ai_reply))
+                conn.commit()
+            except Exception as e:
+                st.error(f"பிழை ஏற்பட்டுள்ளது: {e}")
+                         
