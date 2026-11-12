@@ -1,21 +1,30 @@
 import streamlit as st
 import sqlite3
+import requests
 from io import BytesIO
 from pypdf import PdfReader
 from PIL import Image
 from groq import Groq
-from rapidocr_onnxruntime import RapidOCR
 
 st.set_page_config(page_title="Venu AI", page_icon="🎓", layout="wide")
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-# போட்டோவில் உள்ள எழுத்துக்களைப் படிக்கும் OCR கருவி
-@st.cache_resource
-def load_ocr():
-    return RapidOCR()
-
-ocr = load_ocr()
+# எந்த எரரும் வராத Cloud OCR Function (போட்டோவில் உள்ள எழுத்துக்களைப் படிக்க)
+def extract_image_text(img_bytes):
+    try:
+        res = requests.post(
+            "https://api.ocr.space/parse/image",
+            files={"filename.jpg": img_bytes},
+            data={"apikey": "helloworld", "language": "eng"},
+            timeout=15
+        )
+        data = res.json()
+        if data.get("ParsedResults"):
+            return data["ParsedResults"][0].get("ParsedText", "")
+    except Exception:
+        pass
+    return ""
 
 @st.cache_data(ttl=3600)
 def get_models():
@@ -101,26 +110,24 @@ if prompt_data:
             elif u_file.type == "text/plain":
                 file_text = u_file.read().decode("utf-8")
             elif u_file.type in ["image/jpeg", "image/png", "image/jpg"]:
-                img_bytes = u_file.getvalue()
-                img = Image.open(BytesIO(img_bytes))
+                img = Image.open(u_file)
                 st.image(img, width=280)
-                with st.spinner("போட்டோவில் உள்ள எழுத்துக்களைப் படிக்கிறது..."):
-                    result, _ = ocr(img_bytes)
-                    if result:
-                        file_text = "\n".join([line[1] for line in result])
-                    else:
-                        file_text = "படத்தில் எழுத்துக்கள் எதுவும் கண்டறியப்படவில்லை."
+                img.thumbnail((1000, 1000))
+                buf = BytesIO()
+                img.convert("RGB").save(buf, format="JPEG", quality=80)
+                with st.spinner("படத்தில் உள்ள எழுத்துக்களைப் படிக்கிறது..."):
+                    file_text = extract_image_text(buf.getvalue())
         st.markdown(user_query)
 
     c.execute("INSERT INTO subject_chats (username, subject, role, content, file_name) VALUES (?, ?, ?, ?, ?)", (username, current_sub, "user", user_query, uploaded_file_name))
     conn.commit()
 
-    sub_prompt = f"""நீங்கள் 12-ம் வகுப்பு {current_sub} ஆசிரியர். 
-    கீழே பயனர் அப்லோட் செய்த படம்/ஆவணத்தில் இருந்து எடுக்கப்பட்ட வரிகள் (Extracted Text) கொடுக்கப்பட்டுள்ளன. 
+    sub_prompt = f"""நீங்கள் 12-ம் வகுப்பு {current_sub} ஆசிரியர்.
+    கீழே பயனர் அப்லோட் செய்த கொஸ்டின் பேப்பர்/படத்தில் இருந்து எடுக்கப்பட்ட வரிகள் கொடுக்கப்பட்டுள்ளன.
     அதைப் படித்து பயனரின் கேள்விக்குத் தெளிவாகத் தமிழிலும் ஆங்கிலத்திலும் விளக்கமாகப் பதில் அளிக்கவும்.
     
-    Extracted Content from File/Image:
-    {file_text[:18000] if file_text else 'எந்த ஆவணமும் இல்லை.'}"""
+    Extracted Document Text:
+    {file_text[:18000] if file_text else 'ஆவணத்தில் எழுத்துக்கள் இல்லை.'}"""
 
     with st.chat_message("assistant"):
         with st.spinner("விடைகளைத் தயாரிக்கிறது..."):
@@ -138,3 +145,4 @@ if prompt_data:
             c.execute("INSERT INTO subject_chats (username, subject, role, content, file_name) VALUES (?, ?, ?, ?, ?)", (username, current_sub, "assistant", ai_reply, ""))
             conn.commit()
 # END OF CODE
+                 
