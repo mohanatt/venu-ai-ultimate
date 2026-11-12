@@ -6,7 +6,7 @@ from pypdf import PdfReader
 from PIL import Image
 from groq import Groq
 
-st.set_page_config(page_title="Venu AI", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="Venu AI Ultimate", page_icon="🎓", layout="wide")
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
@@ -14,40 +14,59 @@ client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 def get_models():
     try:
         models = client.models.list()
-        all_ids = [m.id for m in models.data if not any(x in m.id.lower() for x in ["whisper", "guard", "tts", "playai"])]
-        return all_ids if all_ids else ["gemma2-9b-it"]
+        # ஆடியோ, ஆர்ஃபியூஸ் மற்றும் இதர கட்டுப்பாடுள்ள மாடல்களைத் தவிர்த்து Llama / Gemma / Qwen மட்டும் எடுத்தல்
+        chat_models = [
+            m.id for m in models.data 
+            if not any(x in m.id.lower() for x in ["whisper", "orpheus", "guard", "tts", "playai"])
+            and any(k in m.id.lower() for k in ["llama", "gemma", "qwen", "mixtral"])
+        ]
+        return chat_models if chat_models else ["gemma2-9b-it"]
     except Exception:
         return ["gemma2-9b-it"]
 
 available_models = get_models()
 
-# Vision மாடலைத் தேர்ந்தெடுத்தல் (போட்டோவை உடனே படிக்க)
+# Vision மாடல் தேர்வு
 vision_candidates = [m for m in available_models if any(k in m.lower() for k in ["scout", "maverick", "vision", "llama-4"])]
 vision_model = vision_candidates[0] if vision_candidates else available_models[0]
 
+# Text மாடல் தேர்வு
 text_candidates = [m for m in available_models if any(k in m.lower() for k in ["llama-3.3", "llama-3.1", "gemma2"])]
 text_model = text_candidates[0] if text_candidates else available_models[0]
 
-conn = sqlite3.connect("venu_subjects.db", check_same_thread=False)
+# --- Database Setup ---
+conn = sqlite3.connect("venu_hub.db", check_same_thread=False)
 c = conn.cursor()
-c.execute("CREATE TABLE IF NOT EXISTS subject_chats (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, subject TEXT, role TEXT, content TEXT, file_name TEXT)")
+c.execute("""
+    CREATE TABLE IF NOT EXISTS subject_chats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        subject TEXT,
+        role TEXT,
+        content TEXT,
+        file_name TEXT
+    )
+""")
 conn.commit()
 
-if "active_subject" not in st.session_state:
-    st.session_state.active_subject = "Physics"
+# --- Main App ---
+st.markdown("<h1 style='text-align: center;'>🎓 Venu AI - Study Hub</h1>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.title("⚙️ Venu AI Settings")
-    username = st.text_input("உங்கள் பெயர்:", value="Venugopal").strip().lower()
-    selected_model = st.selectbox("AI Model:", available_models, index=available_models.index(text_model))
+    username = st.text_input("உங்கள் பெயர்:", value="venugopal").strip().lower()
+    selected_model = st.selectbox("AI Model:", available_models, index=available_models.index(text_model) if text_model in available_models else 0)
+    
     st.divider()
-    if st.button("🗑️ History-ஐ அழி"):
+    if st.button("🗑️ தற்போதைய Subject History-ஐ அழி"):
         c.execute("DELETE FROM subject_chats WHERE username = ? AND subject = ?", (username, st.session_state.active_subject))
         conn.commit()
         st.rerun()
 
-st.markdown("<h1 style='text-align: center;'>🎓 Venu AI</h1>", unsafe_allow_html=True)
+if "active_subject" not in st.session_state:
+    st.session_state.active_subject = "Physics"
 
+# Subject Buttons
 col1, col2, col3 = st.columns(3)
 with col1:
     if st.button("⚛️ Physics", use_container_width=True, type="primary" if st.session_state.active_subject == "Physics" else "secondary"):
@@ -63,23 +82,33 @@ with col3:
         st.rerun()
 
 current_sub = st.session_state.active_subject
-st.subheader(f"📂 {current_sub} (Question Papers & Answers)")
+st.subheader(f"📂 {current_sub} Section")
 
-c.execute("SELECT DISTINCT file_name FROM subject_chats WHERE username = ? AND subject = ? AND file_name != ''", (username, current_sub))
-saved_files = [row[0] for row in c.fetchall()]
-if saved_files:
-    st.caption("📌 சேமிக்கப்பட்டவை: " + ", ".join(saved_files))
+# --- Export Notes as TXT ---
+c.execute("SELECT role, content FROM subject_chats WHERE username = ? AND subject = ?", (username, current_sub))
+chat_records = c.fetchall()
+
+if chat_records:
+    export_text = f"--- Venu AI Study Notes ({current_sub}) ---\nUser: {username}\n\n"
+    for r, text in chat_records:
+        export_text += f"{r.upper()}:\n{text}\n\n" + "="*40 + "\n\n"
+    
+    st.download_button(
+        label=f"📥 Download {current_sub} Notes (TXT)",
+        data=export_text,
+        file_name=f"{username}_{current_sub}_notes.txt",
+        mime="text/plain"
+    )
 
 st.divider()
 
-c.execute("SELECT role, content, file_name FROM subject_chats WHERE username = ? AND subject = ?", (username, current_sub))
-for role, content, f_name in c.fetchall():
+# Display Chat History
+for role, content in chat_records:
     with st.chat_message(role):
-        if f_name:
-            st.info(f"📄 File: {f_name}")
         st.markdown(content)
 
-prompt_data = st.chat_input(f"{current_sub} கொஸ்டின் பேப்பரை (+) அழுத்தி அப்லோட் செய்யவும்...", accept_file=True, file_type=["pdf", "txt", "jpg", "jpeg", "png"])
+# Chat Input & File Upload
+prompt_data = st.chat_input(f"{current_sub} கொஸ்டின் பேப்பரை (+) அப்லோட் செய்யவும்...", accept_file=True, file_type=["pdf", "txt", "jpg", "jpeg", "png"])
 
 if prompt_data:
     user_query = prompt_data.text or f"இந்த {current_sub} கொஸ்டின் பேப்பரில் உள்ள கேள்விகளுக்குத் தெளிவாக விடை எழுதித் தரவும்."
@@ -92,23 +121,22 @@ if prompt_data:
         if uploaded_files:
             u_file = uploaded_files[0]
             uploaded_file_name = u_file.name
-            st.info(f"📄 அப்லோட் ஆனது: {uploaded_file_name}")
-            
             if u_file.type == "application/pdf":
                 reader = PdfReader(u_file)
                 for page in reader.pages:
                     file_text += page.extract_text() or ""
+                st.info(f"📄 PDF: {uploaded_file_name}")
             elif u_file.type == "text/plain":
                 file_text = u_file.read().decode("utf-8")
+                st.info(f"📝 Text: {uploaded_file_name}")
             elif u_file.type in ["image/jpeg", "image/png", "image/jpg"]:
                 img = Image.open(u_file)
-                st.image(img, width=250)
-                # வேகத்திற்காக போட்டோவை சிறிய சைசாக மாற்றுதல்
-                img.thumbnail((700, 700))
+                img.thumbnail((600, 600))
                 buffered = BytesIO()
-                img.convert("RGB").save(buffered, format="JPEG", quality=65)
+                img.convert("RGB").save(buffered, format="JPEG", quality=50)
                 base64_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
-        
+                st.image(img, width=250)
+                st.success("✅ போட்டோ அப்லோட் ஆனது!")
         st.markdown(user_query)
 
     c.execute("INSERT INTO subject_chats (username, subject, role, content, file_name) VALUES (?, ?, ?, ?, ?)", (username, current_sub, "user", user_query, uploaded_file_name))
@@ -117,10 +145,9 @@ if prompt_data:
     sub_prompt = f"நீங்கள் 12-ம் வகுப்பு {current_sub} ஆசிரியர். கொடுக்கப்பட்டுள்ள கொஸ்டின் பேப்பரைப் படித்து கேள்விகளுக்குத் தெளிவான விடைகளைத் தாருங்கள்."
 
     with st.chat_message("assistant"):
-        with st.spinner("வேகமாக பதிலைத் தயாரிக்கிறது..."):
+        with st.spinner("AI விடைகளைத் தயாரிக்கிறது..."):
             try:
                 if base64_image:
-                    # Groq Vision மாடல் மூலம் ஒரே நொடியில் போட்டோவைப் படித்து பதில் தரும்
                     chat_completion = client.chat.completions.create(
                         messages=[
                             {
@@ -147,4 +174,4 @@ if prompt_data:
                 conn.commit()
             except Exception as e:
                 st.error(f"பிழை: {e}")
-# END OF CODE
+        
