@@ -10,14 +10,14 @@ st.set_page_config(page_title="Venu AI", page_icon="🎓", layout="wide")
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-# எந்த எரரும் வராத Cloud OCR Function (போட்டோவில் உள்ள எழுத்துக்களைப் படிக்க)
+# வேகமான Cloud OCR (போட்டோவை சுருக்கி அனுப்புவதால் உடனும் முடிந்துவிடும்)
 def extract_image_text(img_bytes):
     try:
         res = requests.post(
             "https://api.ocr.space/parse/image",
-            files={"filename.jpg": img_bytes},
+            files={"image.jpg": img_bytes},
             data={"apikey": "helloworld", "language": "eng"},
-            timeout=15
+            timeout=10
         )
         data = res.json()
         if data.get("ParsedResults"):
@@ -111,11 +111,12 @@ if prompt_data:
                 file_text = u_file.read().decode("utf-8")
             elif u_file.type in ["image/jpeg", "image/png", "image/jpg"]:
                 img = Image.open(u_file)
-                st.image(img, width=280)
-                img.thumbnail((1000, 1000))
+                st.image(img, width=250)
+                # போட்டோவின் அளவை சுருக்கி வேகமாக அனுப்பும் பகுதி
+                img.thumbnail((800, 800))
                 buf = BytesIO()
-                img.convert("RGB").save(buf, format="JPEG", quality=80)
-                with st.spinner("படத்தில் உள்ள எழுத்துக்களைப் படிக்கிறது..."):
+                img.convert("RGB").save(buf, format="JPEG", quality=70)
+                with st.spinner("வேகமாகப் படிக்கிறது..."):
                     file_text = extract_image_text(buf.getvalue())
         st.markdown(user_query)
 
@@ -145,4 +146,3 @@ if prompt_data:
             c.execute("INSERT INTO subject_chats (username, subject, role, content, file_name) VALUES (?, ?, ?, ?, ?)", (username, current_sub, "assistant", ai_reply, ""))
             conn.commit()
 # END OF CODE
-                 
