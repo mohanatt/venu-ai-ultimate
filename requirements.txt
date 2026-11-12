@@ -2,6 +2,7 @@ streamlit>=1.35.0
 groq>=0.9.0
 tavily-python>=0.3.3
 streamlit
-google-genai
+groq
 pypdf
 pillow
+
