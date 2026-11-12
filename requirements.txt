@@ -1,9 +1,5 @@
-streamlit>=1.35.0
-groq>=0.9.0
-tavily-python>=0.3.3
-streamlit
+streamlit>=1.43.0
 groq
 pypdf
 pillow
-
 rapidocr-onnxruntime
