@@ -6,3 +6,4 @@ groq
 pypdf
 pillow
 
+rapidocr-onnxruntime
